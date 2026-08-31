@@ -330,7 +330,7 @@ class HamiltonianParameters(pydantic.BaseModel):
         default=50,
         ge=2,
         le=10000,
-        description="Number of points in temperature/field sweeps"
+        description="Number of points in temperature/field sweeps (minimum 2; 1 is rejected)"
     )
 
     # --- Corrections ---
@@ -376,15 +376,25 @@ class HamiltonianParameters(pydantic.BaseModel):
     # --- Orbital Angular Momentum Parameters (L contributions) ---
     sigma_L: typing.Dict[str, float] = pydantic.Field(
         default_factory=dict,
-        description="Orbital reduction factor per L-center ID: {'1': 0.9, ...}"
+        description=(
+            "Orbital reduction on μ_B σ B·L̂ (orbital Zeeman) per L-center ID: {'1': 0.9, ...}. "
+            "Default 1. Not the chemist σ of Ŝ·L̂ — that is lambda_sigma_SL."
+        )
     )
     lambda_SL: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+$")], float] = pydantic.Field(
         default_factory=dict,
-        description="Spin-orbit coupling λ_SL per center (typically self-coupling): {'1-1': 500, ...} (cm⁻¹)"
+        description=(
+            "Chemist λ of Ŝ·L̂ (cm⁻¹) per center ID. Keys are digits only, e.g. {'1': 152.4}. "
+            "Never use '1-1'. H_SOC = lambda_SL × lambda_sigma_SL × Ŝ·L̂."
+        )
     )
     lambda_sigma_SL: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+$")], float] = pydantic.Field(
         default_factory=dict,
-        description="Modified spin-orbit parameter per center: {'1-1': 100, ...} (cm⁻¹)"
+        description=(
+            "Chemist σ of Ŝ·L̂ (dimensionless) per center ID, e.g. {'1': 1.35}. "
+            "Keys are digits only, never '1-1'. Template default is 0: if λ is set and this stays 0, "
+            "SOC is identically zero. Not sigma_L (orbital Zeeman) and not sigma_CF (CF scale)."
+        )
     )
 
     # --- g-Factor Parameters (J-type centers) ---
@@ -416,12 +426,18 @@ class HamiltonianParameters(pydantic.BaseModel):
     # --- Crystal pydantic.Field Parameters ---
     sigma_CF: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+_[246]$")], float] = pydantic.Field(
         default_factory=dict,
-        description="CF scaling parameters σ_k per electron & rank k: {'1_2': 1.0, '1_4': 0.8, '1_6': 0.5, ...}"
+        description=(
+            "CF scale σ_k on B_k^q per electron & rank k: {'1_2': 1.0, '1_4': 0.8, '1_6': 0.5, ...}. "
+            "Default 1. Not the chemist σ of Ŝ·L̂ (that is lambda_sigma_SL)."
+        )
     )
     B_kq: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+_[246]_[-+]?\d+$")], float] = pydantic.Field(
         default_factory=dict,
-        description="Stevens CF parameters B_k^q per electron, rank k, and projection q: "
-                    "{'1_2_-2': 0.1, '1_2_0': 0.5, '1_4_4': -0.03, ...} (cm⁻¹)"
+        description=(
+            "Stevens CF parameters B_k^q per electron, rank k, and projection q: "
+            "{'1_2_-2': 0.1, '1_2_0': 0.5, '1_4_4': -0.03, ...} (cm⁻¹). "
+            "There is no field named Δ; axial crystal-field Δ is usually B_kq['1_2_0']."
+        )
     )
 
     # --- Computation Flags ---

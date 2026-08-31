@@ -47,10 +47,14 @@ from optimize import optimize  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hamiltonian import (  # noqa: E402
+    MCP_INSTRUCTIONS,
     apply_template_defaults,
+    build_co_sl_axial_example,
     determine_from_spin_systems,
     determine_hamiltonian_spec,
     extra_hamiltonian_keys,
+    physics_warnings_from_hp,
+    register_maigic_skill,
 )
 
 PropertyName = Literal["susceptibility", "magnetization", "energy_levels"]
@@ -76,23 +80,10 @@ def _http_auth() -> StaticTokenVerifier:
 
 mcp = FastMCP(
     "MaIGIC",
-    instructions=(
-        "REQUIRED WORKFLOW — do this before every calculation, fit, or modelling step: "
-        "1) Call determine_hamiltonian with the complex (electrons, nuclei, point_group). "
-        "2) Read formula_latex. That is the Hamiltonian. Do not invent ZFS, exchange, CF, "
-        "hyperfine, or orbital terms that are missing from it. "
-        "3) Copy spin_systems and hamiltonian_params_template into compute_property / "
-        "optimize_parameters / validate_request. Change only numbers and sweep settings. "
-        "Passing keys that are not in the template is rejected. "
-        "Call list_nuclei before naming nuclei. Call list_lanthanide_ions for Ln(III) S, L, J, g_J. "
-        "If originIon is a Ln(III) name, B_kq is multiplied by Stevens θ_k; if null, θ_k = 1. "
-        "parameter_fixed_state: True = hold fixed, False = fit; at least one key must be False. "
-        "Keep numPoints at 10–20 unless the user asks for a dense curve. "
-        "Keep optimize maxiter ≤ 20 and few data points. "
-        "Hilbert-space dimension is the product of (2s+1) over all centers (and L if L>0)."
-    ),
+    instructions=MCP_INSTRUCTIONS,
     auth=_http_auth(),
 )
+register_maigic_skill(mcp)
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -416,8 +407,15 @@ def determine_hamiltonian(payload: DetermineHamiltonianRequest) -> dict[str, Any
     H(J): one J → e-B + CF; several J → plus exchange.
     H(I): if any nuclei → nuclear Zeeman + hyperfine.
 
-    Returns formula_latex, spin_systems (with assigned ids), and hamiltonian_params_template.
-    Copy those two objects into later tools. Do not add Hamiltonian keys that are not in the template.
+    Returns formula_latex, chemist_mapping (when L>0), spin_systems (with assigned ids),
+    and hamiltonian_params_template. Copy spin_systems + template into later tools.
+    Do not add Hamiltonian keys that are not in the template.
+
+    S–L chemist mapping (do not probe energy_levels to learn this):
+    λ (cm⁻¹) → lambda_SL['1'] (digit keys only, never '1-1');
+    σ of Ŝ·L̂ → lambda_sigma_SL['1'] (default 0; H_SOC = λ×σ×Ŝ·L̂);
+    sigma_L is orbital Zeeman, not chemist σ; axial Δ is B_kq['1_2_0'].
+    For Co(II) S=3/2 L=1 call get_example_payload(example='co_sl_axial').
     """
     spec = determine_hamiltonian_spec(
         electrons=[e.model_dump() for e in payload.electrons],
@@ -497,10 +495,19 @@ def get_crystal_field_terms(point_group: str) -> dict[str, Any]:
 @mcp.tool
 def get_example_payload(
     example: Literal[
-        "s_half", "s_one_zfs", "gd_j", "two_spins_exchange", "fit_zfs"
+        "s_half",
+        "s_one_zfs",
+        "gd_j",
+        "two_spins_exchange",
+        "fit_zfs",
+        "co_sl_axial",
     ] = "s_half",
 ) -> dict[str, Any]:
-    """Return a complete, valid payload you can edit and pass to compute_property or optimize_parameters."""
+    """Return a complete, valid payload you can edit and pass to compute_property or optimize_parameters.
+
+    co_sl_axial: high-spin Co(II) S=3/2 L=1 with λ, chemist σ of S–L, and axial B_2^0.
+    Copy hamiltonian_params as-is; only change numbers. Do not reverse-engineer keys.
+    """
     examples: dict[str, dict[str, Any]] = {
         "s_half": {
             "description": "Isotropic S=1/2, g=2, χ vs T at B=0.1 T",
@@ -593,6 +600,7 @@ def get_example_payload(
             },
             "maxiter": 8,
         },
+        "co_sl_axial": build_co_sl_axial_example(),
     }
     return examples[example]
 
@@ -643,7 +651,7 @@ def validate_request(payload: ComputeRequest) -> dict[str, Any]:
         "above_safety_limit": dim > MAX_HILBERT_DIM,
         "safety_limit": MAX_HILBERT_DIM,
         "fit_parameter_keys": [e["key"] for e in spec["allowed_parameter_keys"]],
-        "warnings": spec["warnings"],
+        "warnings": physics_warnings_from_hp(hp, spec),
     }
 
 
@@ -665,6 +673,12 @@ def compute_property(
 
     Units: T in K, B in T, χ in cm³ mol⁻¹, Δχ in 1e-6 cm³ mol⁻¹ (SI, includes 4π from cgs),
     M in μB. Hamiltonian parameters D, E, J_ex, λ, B_kq are in cm⁻¹; A_hf in MHz.
+
+    S–L: chemist λ → lambda_SL['1']; chemist σ of Ŝ·L̂ → lambda_sigma_SL['1']
+    (template default 0 — if λ≠0 and σ=0, SOC energies are identically zero).
+    sigma_L is orbital Zeeman μ_B σ B·L̂. Axial Δ → B_kq['1_2_0'].
+    Keys are digits ('1'), never '1-1'. numPoints ≥ 2.
+    Do not probe energy_levels to learn the API; use get_example_payload('co_sl_axial').
     """
     request = _to_base_request(payload.spin_systems, payload.hamiltonian_params)
     spin_systems, hp, dim, spec = _prepare(
@@ -741,6 +755,7 @@ def compute_property(
             "numPoints": hp["numPoints"],
             "units": units,
             "result": result,
+            "warnings": physics_warnings_from_hp(hp, spec),
         }
     )
 
@@ -835,6 +850,7 @@ def optimize_parameters(payload: OptimizeRequest) -> dict[str, Any]:
             "method": payload.method,
             "fitted_values": fitted,
             "hamiltonian_params": HamiltonianParameters.model_validate(optimized).model_dump(),
+            "warnings": physics_warnings_from_hp(hp, spec),
         }
     )
 

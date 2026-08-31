@@ -51,6 +51,148 @@ TERM_PARAM_BLOCKS = {
     "H(I)_e-n": ["A_hf"],
 }
 
+MCP_INSTRUCTIONS = (
+    "REQUIRED WORKFLOW — do this before every calculation, fit, or modelling step: "
+    "1) Call determine_hamiltonian with the complex (electrons, nuclei, point_group). "
+    "2) Read formula_latex and chemist_mapping. That is the Hamiltonian. Do not invent ZFS, "
+    "exchange, CF, hyperfine, or orbital terms that are missing from it. "
+    "3) Copy spin_systems and hamiltonian_params_template into compute_property / "
+    "optimize_parameters / validate_request. Change only numbers and sweep settings. "
+    "Passing keys that are not in the template is rejected. "
+    "Call list_nuclei before naming nuclei. Call list_lanthanide_ions for Ln(III) S, L, J, g_J. "
+    "If originIon is a Ln(III) name, B_kq is multiplied by Stevens θ_k; if null, θ_k = 1. "
+    "parameter_fixed_state: True = hold fixed, False = fit; at least one key must be False. "
+    "Keep numPoints at 10–20 (minimum 2 — the schema rejects 1) unless the user asks for a dense curve. "
+    "Keep optimize maxiter ≤ 20 and few data points. "
+    "Hilbert-space dimension is the product of (2s+1) over all centers (and L if L>0). "
+    "S–L mapping (do not guess, do not probe energy_levels to learn keys): "
+    "chemist λ (cm⁻¹) → lambda_SL['1'] (digit keys only, never '1-1'); "
+    "chemist σ of the S–L term → lambda_sigma_SL['1'] (template default 0; H_SOC = λ×σ×Ŝ·L̂, so if λ≠0 and this is 0, SOC is identically zero); "
+    "sigma_L['1'] is orbital Zeeman μ_B σ B·L̂ (default 1), not chemist σ of S–L; "
+    "sigma_CF['1_2'] is the CF scale on B_2^q (default 1), not chemist σ of S–L; "
+    "there is no parameter named Δ — axial crystal-field Δ is B_kq['1_2_0']; pass point_group (D4h, C2v, …) to restrict Stevens operators. "
+    "High-spin Co(II) with L=1: S=3/2, L=1; call get_example_payload(example='co_sl_axial') and edit numbers."
+)
+
+CHEMIST_MAPPING_SL: dict[str, str] = {
+    "lambda_SL": (
+        "Chemist λ of Ŝ·L̂ (cm⁻¹). Keys are center ids as digits only, e.g. '1'. Never '1-1'."
+    ),
+    "lambda_sigma_SL": (
+        "Chemist σ of the S–L term (dimensionless). H_SOC = λ × σ × Ŝ·L̂. "
+        "Template default is 0: if you set λ but leave this at 0, SOC energies stay identically 0."
+    ),
+    "sigma_L": (
+        "Orbital reduction on μ_B σ B·L̂ (orbital Zeeman), default 1. "
+        "Not the chemist σ of S–L; that belongs in lambda_sigma_SL."
+    ),
+    "sigma_CF": (
+        "Per-rank CF scale on B_k^q, keys '{id}_{k}' e.g. '1_2'. Default 1. Not the chemist σ of S–L."
+    ),
+    "B_kq": (
+        "Stevens B_k^q (cm⁻¹), keys '{id}_{k}_{q}' e.g. '1_2_0'. "
+        "There is no field named Δ. Axial crystal-field Δ is usually B_kq['1_2_0']. "
+        "Pass point_group (D4h, C2v, …) so unused q are off."
+    ),
+    "do_not": (
+        "Do not call energy_levels to reverse-engineer key formats or which field is SOC. "
+        "Copy hamiltonian_params_template keys. For Co(II) S=3/2 L=1 use get_example_payload('co_sl_axial')."
+    ),
+}
+
+
+def chemist_mapping_for_spec(term_selection: dict[str, bool]) -> dict[str, str] | None:
+    if not (
+        term_selection.get("H(L)_S-L")
+        or term_selection.get("H(L)_e-B")
+        or term_selection.get("H(L)_CF")
+    ):
+        return None
+    return dict(CHEMIST_MAPPING_SL)
+
+
+def _float_map(d: dict[str, Any] | None) -> dict[str, float]:
+    return {str(k): float(v) for k, v in (d or {}).items()}
+
+
+def physics_warnings_from_hp(
+    hp: dict[str, Any],
+    spec: dict[str, Any] | None = None,
+) -> list[str]:
+    """Warnings the backend will not raise as errors (e.g. SOC identically zero)."""
+    warnings: list[str] = []
+    if spec:
+        warnings.extend(spec.get("warnings") or [])
+    lam = _float_map(hp.get("lambda_SL"))
+    lsig = _float_map(hp.get("lambda_sigma_SL"))
+    ids = set(lam) | set(lsig)
+    for cid in sorted(ids, key=lambda x: int(x) if str(x).isdigit() else str(x)):
+        lv = lam.get(cid, 0.0)
+        sv = lsig.get(cid, 0.0)
+        if abs(lv) > 0 and abs(sv) == 0:
+            warnings.append(
+                f"Center {cid}: lambda_SL={lv} but lambda_sigma_SL=0. "
+                "H_SOC = λ × σ × Ŝ·L̂, so spin-orbit is identically zero. "
+                "Chemist σ of S–L belongs in lambda_sigma_SL (not sigma_L / sigma_CF)."
+            )
+        elif abs(lv) == 0 and abs(sv) > 0:
+            warnings.append(
+                f"Center {cid}: lambda_sigma_SL={sv} but lambda_SL=0. "
+                "H_SOC is still zero. Set lambda_SL to chemist λ (cm⁻¹)."
+            )
+    return warnings
+
+
+def build_co_sl_axial_example() -> dict[str, Any]:
+    """High-spin Co(II): S=3/2, L=1, axial CF. Edit numbers, then compute_property."""
+    spec = determine_hamiltonian_spec(
+        electrons=[{"type": "S", "S": 1.5, "L": 1.0, "originIon": None}],
+        point_group="D4h",
+    )
+    hp = deepcopy(spec["hamiltonian_params_template"])
+    hp["lambda_SL"]["1"] = 152.4
+    hp["lambda_sigma_SL"]["1"] = 1.35
+    hp["sigma_L"]["1"] = 1.35
+    hp.setdefault("B_kq", {})["1_2_0"] = -632.0
+    hp["calculationMode"] = "fixedB"
+    hp["fixedB"] = 7.0
+    hp["Tmin"] = 200.0
+    hp["Tmax"] = 300.0
+    hp["numPoints"] = 12
+    hp["computeChi"] = True
+    hp["computeChiAx"] = True
+    hp["computeChiT"] = True
+    return {
+        "description": (
+            "High-spin Co(II) S=3/2 L=1, axial CF. χT and Δχ_ax vs T at 7 T. "
+            "λ → lambda_SL; chemist σ of S–L → lambda_sigma_SL (not sigma_L/sigma_CF); "
+            "Δ → B_kq['1_2_0']. Copy into compute_property(property='susceptibility')."
+        ),
+        "point_group": "D4h",
+        "spin_systems": spec["spin_systems"],
+        "hamiltonian_params": hp,
+        "chemist_mapping": spec.get("chemist_mapping"),
+        "notes": [
+            "λ = lambda_SL['1'] = 152.4 cm⁻¹ (digit key '1', never '1-1')",
+            "σ of S–L = lambda_sigma_SL['1'] = 1.35; if this stays 0, SOC is identically zero",
+            "sigma_L['1'] = 1.35 is orbital Zeeman reduction (same number as chemist σ, different term)",
+            "Δ axial CF → B_kq['1_2_0'] = -632 cm⁻¹; there is no parameter named Δ",
+            "numPoints must be ≥ 2",
+        ],
+    }
+
+
+def register_maigic_skill(mcp: Any) -> None:
+    skill_dir = Path(__file__).resolve().parent / "skills" / "maigic-workflow"
+    if not (skill_dir / "SKILL.md").is_file():
+        return
+    try:
+        from fastmcp.server.providers.skills import SkillProvider
+
+        mcp.add_provider(SkillProvider(skill_dir))
+    except Exception:
+        return
+
 
 def parse_quantum_number(value: Any) -> float:
     if value is None:
@@ -491,7 +633,14 @@ def _template_and_keys(
         for sid in l_ids:
             template["sigma_L"][str(sid)] = 1.0
             fit_keys.append(
-                {"key": f"sigma_L_{sid}", "meaning": f"orbital reduction σ_L of center {sid}", "unit": ""}
+                {
+                    "key": f"sigma_L_{sid}",
+                    "meaning": (
+                        f"orbital Zeeman reduction σ_L of center {sid} (μ_B σ B·L̂). "
+                        "Not chemist σ of Ŝ·L̂ (that is lambda_sigma_SL)."
+                    ),
+                    "unit": "",
+                }
             )
             allowed_leaf.add(f"sigma_L.{sid}")
 
@@ -500,13 +649,23 @@ def _template_and_keys(
             template["lambda_SL"][str(sid)] = 0.0
             template["lambda_sigma_SL"][str(sid)] = 0.0
             fit_keys.append(
-                {"key": f"lambda_SL_{sid}", "meaning": f"spin-orbit λ of center {sid}", "unit": "cm^-1"}
+                {
+                    "key": f"lambda_SL_{sid}",
+                    "meaning": (
+                        f"chemist λ of Ŝ·L̂ for center {sid} (cm⁻¹). "
+                        f"Key is digit '{sid}', never '{sid}-{sid}'."
+                    ),
+                    "unit": "cm^-1",
+                }
             )
             fit_keys.append(
                 {
                     "key": f"lambda_sigma_SL_{sid}",
-                    "meaning": f"modified spin-orbit of center {sid}",
-                    "unit": "cm^-1",
+                    "meaning": (
+                        f"chemist σ of Ŝ·L̂ for center {sid} (dimensionless). "
+                        "H_SOC = λ × σ × Ŝ·L̂. Template default 0: leaving this at 0 zeros SOC."
+                    ),
+                    "unit": "",
                 }
             )
             allowed_leaf.add(f"lambda_SL.{sid}")
@@ -675,7 +834,7 @@ def determine_from_spin_systems(
     if point_group:
         family = SYMMETRY_INFO["group_to_symmetry"].get(point_group.strip())
 
-    return {
+    out: dict[str, Any] = {
         "formula_latex": f"H = {latex}" if latex else "",
         "blocks": blocks,
         "terms": {block: [t for t in computed[block] if term_selection.get(f"{block}_{t}")] for block in computed},
@@ -692,9 +851,15 @@ def determine_from_spin_systems(
             "Copy spin_systems and hamiltonian_params_template into compute_property / "
             "optimize_parameters. Change numerical values and sweep settings only. "
             "Do not add D, E, J_ex, B_kq, A_hf, or other keys that are absent from the template — "
-            "they are not in this Hamiltonian."
+            "they are not in this Hamiltonian. "
+            "lambda_SL / lambda_sigma_SL keys are center ids as digits ('1'), never '1-1'. "
+            "numPoints ≥ 2. Do not probe energy_levels to learn the API."
         ),
     }
+    mapping = chemist_mapping_for_spec(term_selection)
+    if mapping:
+        out["chemist_mapping"] = mapping
+    return out
 
 
 def determine_hamiltonian_spec(
