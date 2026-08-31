@@ -1,0 +1,62 @@
+{
+  "S" : {
+    "e-B" : {
+      "formula" : "\\mu_B \\cdot \\vec B^T \\cdot g^i \\cdot \\hat S^i",
+      "type" : "S"
+    },
+    "S-S" : {
+      "formula" : "\\hat S^i \\cdot D^{ii} \\cdot \\hat S^i",
+      "type" : "S"
+    },  
+    "e-e" : {
+      "formula" : "\\hat S^i \\cdot J^{ij} \\cdot \\hat S^j",
+      "type" : "SS"
+    }
+  },
+  "L" : {
+    "e-B" : {
+      "formula" : "\\mu_B \\cdot \\sigma^i \\cdot \\vec B^T \\cdot 1 \\cdot \\hat L^i",
+      "type" : "L"
+    },
+    "S-L" : {
+        "formula" : "\\lambda^{ij} \\sigma^{ij} \\hat S^i \\cdot \\hat L^j",
+        "type" : "SL"
+    },
+    "CF" : {
+      "formula" : "\\sum_{k=2,4,6} \\sum_{q=-k}^k \\sigma_k^i {B_k^q}^i \\theta_k^i {\\hat O_k^q}^i ( \\hat L )",
+      "type" : "L"
+    }
+  },
+  "J" : {
+    "e-B" : {
+      "formula" : "\\mu_B \\cdot \\vec B^T \\cdot g^i \\cdot \\hat J^i",
+      "type" : "J"
+    },
+    "e-e" : {
+      "formula" : "\\hat J^i \\cdot J^{ij} \\cdot \\hat J^j",
+      "type" : "JJ"
+    },
+    "CF" : {
+      "formula" : "\\sum_{k=2,4,6} \\sum_{q=-k}^k \\sigma_k^i {B_k^q}^i \\theta_k^i {\\hat O_k^q}^i ( \\hat J )",
+      "type" : "J"
+    }
+  },
+  "I" : {
+    "n-B" : {
+      "formula" : "\\mu_N \\cdot g^i \\cdot \\hat I^i \\cdot \\sigma^i \\cdot \\vec B",
+      "type" : "I"
+    },
+    "Se-n" : {
+      "formula" : "\\hat S^i \\cdot A^{ij} \\cdot \\hat I^{ij}",
+      "type" : "SI"
+    },
+    "Le-n" : {
+      "formula" : "\\hat L^i \\cdot A^{ij} \\cdot \\hat I^{ij}",
+      "type" : "LI"
+    },
+    "Je-n" : {
+      "formula" : "\\hat J^i \\cdot A^{ij} \\cdot \\hat I^{ij}",
+      "type" : "JI"
+    }
+  }
+}

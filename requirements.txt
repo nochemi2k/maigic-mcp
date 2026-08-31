@@ -1,0 +1,7 @@
+fastmcp>=2.13
+fastapi
+pydantic>=2
+numpy
+uvicorn
+pandas
+scipy
