@@ -922,10 +922,14 @@ def get_magnetic_susceptibility(
         diag_values[dim] += hamiltonian_params['tip_correction']
         diag_values[dim] += hamiltonian_params['diamagnetic_correction']
 
+    # diag_values are molar χ in cm³ mol⁻¹ (cgs). χ stays in those units.
+    # Δχ is reported as SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs (do not divide by N_A).
+    dax = diag_values[2] - 0.5 * (diag_values[0] + diag_values[1])
+    drh = diag_values[0] - diag_values[1]
     return {
         '\\chi' : (diag_values[0] + diag_values[1] + diag_values[2]) / 3,
-        '\\Delta \\chi_{ax}' : 4 * np.pi * (diag_values[2] - 0.5 * (diag_values[0] + diag_values[1])) / (1e6 * n_a),
-        '\\Delta \\chi_{rh}' : 4 * np.pi * (diag_values[0] - diag_values[1]) / (1e6 * n_a)
+        '\\Delta \\chi_{ax}' : 4 * np.pi * dax,
+        '\\Delta \\chi_{rh}' : 4 * np.pi * drh,
     }
 
 def get_magnetization_vector_b_const(

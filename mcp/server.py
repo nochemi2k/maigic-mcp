@@ -47,12 +47,14 @@ from optimize import optimize  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hamiltonian import (  # noqa: E402
+    LANTHANIDE_IONS,
     MCP_INSTRUCTIONS,
     apply_template_defaults,
     build_co_sl_axial_example,
     determine_from_spin_systems,
     determine_hamiltonian_spec,
     extra_hamiltonian_keys,
+    lande_g,
     physics_warnings_from_hp,
     register_maigic_skill,
 )
@@ -98,29 +100,6 @@ def _load_json(name: str) -> Any:
 
 NUCLEI_INFO: dict[str, dict[str, float]] = _load_json("nuclei_info.json")
 SYMMETRY_INFO: dict[str, Any] = _load_json("symmetry_info.json")
-
-# Ground-term data for free Ln(III) ions (Russell–Saunders).
-LANTHANIDE_IONS: dict[str, dict[str, Any]] = {
-    "Ce(III)": {"config": "4f1", "term": "2F5/2", "S": 0.5, "L": 3, "J": 2.5},
-    "Pr(III)": {"config": "4f2", "term": "3H4", "S": 1.0, "L": 5, "J": 4.0},
-    "Nd(III)": {"config": "4f3", "term": "4I9/2", "S": 1.5, "L": 6, "J": 4.5},
-    "Pm(III)": {"config": "4f4", "term": "5I4", "S": 2.0, "L": 6, "J": 4.0},
-    "Sm(III)": {"config": "4f5", "term": "6H5/2", "S": 2.5, "L": 5, "J": 2.5},
-    "Eu(III)": {"config": "4f6", "term": "7F0", "S": 3.0, "L": 3, "J": 0.0},
-    "Gd(III)": {"config": "4f7", "term": "8S7/2", "S": 3.5, "L": 0, "J": 3.5},
-    "Tb(III)": {"config": "4f8", "term": "7F6", "S": 3.0, "L": 3, "J": 6.0},
-    "Dy(III)": {"config": "4f9", "term": "6H15/2", "S": 2.5, "L": 5, "J": 7.5},
-    "Ho(III)": {"config": "4f10", "term": "5I8", "S": 2.0, "L": 6, "J": 8.0},
-    "Er(III)": {"config": "4f11", "term": "4I15/2", "S": 1.5, "L": 6, "J": 7.5},
-    "Tm(III)": {"config": "4f12", "term": "3H6", "S": 1.0, "L": 5, "J": 6.0},
-    "Yb(III)": {"config": "4f13", "term": "2F7/2", "S": 0.5, "L": 3, "J": 7.5},
-}
-
-
-def _lande_g(S: float, L: float, J: float) -> float | None:
-    if J <= 0:
-        return None
-    return 1.0 + (J * (J + 1) + S * (S + 1) - L * (L + 1)) / (2.0 * J * (J + 1))
 
 
 def _jsonable(obj: Any) -> Any:
@@ -458,7 +437,7 @@ def list_lanthanide_ions() -> dict[str, Any]:
     for name, data in LANTHANIDE_IONS.items():
         ions[name] = {
             **data,
-            "g_J": _lande_g(data["S"], data["L"], data["J"]),
+            "g_J": lande_g(data["S"], data["L"], data["J"]),
             "stevens_theta_L": cf_params[name]["L"],
             "stevens_theta_J": cf_params[name]["J"],
         }
@@ -503,10 +482,18 @@ def get_example_payload(
         "co_sl_axial",
     ] = "s_half",
 ) -> dict[str, Any]:
-    """Return a complete, valid payload you can edit and pass to compute_property or optimize_parameters.
+    """Return a complete valid payload. Copy spin_systems + hamiltonian_params into the next tool.
 
-    co_sl_axial: high-spin Co(II) S=3/2 L=1 with λ, chemist σ of S–L, and axial B_2^0.
-    Copy hamiltonian_params as-is; only change numbers. Do not reverse-engineer keys.
+    example → next call:
+      s_half             → compute_property(property='susceptibility')  Curie S=1/2 χ vs T
+      s_one_zfs          → compute_property(property='energy_levels')   S=1, D vs B
+      two_spins_exchange → compute_property(property='susceptibility')  dimer, H=J Ŝ1·Ŝ2, J>0 AF
+      gd_j               → compute_property(property='susceptibility')  Gd(III) J=7/2 χ vs T
+                           (for M vs B: calculationMode='fixedT', property='magnetization')
+      co_sl_axial        → compute_property(property='susceptibility')  Co(II) S=3/2 L=1 χT and Δχ_ax
+      fit_zfs            → optimize_parameters(payload=<this object>)   fit D to χT (column 'chi_t')
+
+    Edit numbers only. Do not reverse-engineer keys. Do not probe energy_levels.
     """
     examples: dict[str, dict[str, Any]] = {
         "s_half": {
@@ -557,7 +544,10 @@ def get_example_payload(
             },
         },
         "two_spins_exchange": {
-            "description": "Two S=1/2 coupled by J_ex = -10 cm⁻¹ (antiferromagnetic)",
+            "description": (
+                "Two S=1/2, Heisenberg H=J Ŝ1·Ŝ2 with J_ex['1-2']=+10 cm⁻¹ (antiferromagnetic; "
+                "χT→0 at low T). Next: compute_property(property='susceptibility'). J<0 is ferromagnetic."
+            ),
             "spin_systems": [
                 {"id": 1, "type": "S", "S": 0.5, "L": 0.0, "originIon": None},
                 {"id": 2, "type": "S", "S": 0.5, "L": 0.0, "originIon": None},
@@ -570,7 +560,7 @@ def get_example_payload(
                 "numPoints": 16,
                 "gType": {"1": "isotropic", "2": "isotropic"},
                 "g": {"1": 2.0023, "2": 2.0023},
-                "J_ex": {"1-2": -10.0},
+                "J_ex": {"1-2": 10.0},
             },
         },
         "fit_zfs": {
@@ -662,23 +652,21 @@ def compute_property(
 ) -> dict[str, Any]:
     """Run a MaIGIC backend calculation.
 
-    Call determine_hamiltonian first and pass its spin_systems + hamiltonian_params_template
-    (with numbers filled). Extra Hamiltonian terms not in that formula are rejected.
+    Call determine_hamiltonian first. Pass its spin_systems + hamiltonian_params_template
+    (numbers filled) and the same point_group. Extra Hamiltonian terms are rejected.
 
-    property:
-      - susceptibility: χ, Δχ_ax, Δχ_rh vs T (fixedB) or vs B (fixedT)
-      - magnetization: M_x, M_y, M_z in μB
-      - energy_levels: eigenvalues. fixedB → one spectrum at fixedB;
-        fixedT → spectrum vs B. Also returned converted to cm⁻¹.
+    property (pick from the chemist request):
+      - susceptibility: χ vs T (fixedB) or vs B (fixedT).
+        result.chi (cm³ mol⁻¹), result.chi_T (cm³ K mol⁻¹), result.delta_chi_ax / delta_chi_rh
+        (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs). This is the tool for χ, χT, and Δχ plots.
+      - magnetization: M_x, M_y, M_z and powder-mean result.M (μB). Use calculationMode='fixedT' for M vs B.
+      - energy_levels: eigenvalues. fixedB → one spectrum; fixedT → vs B. result.E_cm_inv.
+        Do not use this to learn API keys.
 
-    Units: T in K, B in T, χ in cm³ mol⁻¹, Δχ in 1e-6 cm³ mol⁻¹ (SI, includes 4π from cgs),
-    M in μB. Hamiltonian parameters D, E, J_ex, λ, B_kq are in cm⁻¹; A_hf in MHz.
-
-    S–L: chemist λ → lambda_SL['1']; chemist σ of Ŝ·L̂ → lambda_sigma_SL['1']
-    (template default 0 — if λ≠0 and σ=0, SOC energies are identically zero).
-    sigma_L is orbital Zeeman μ_B σ B·L̂. Axial Δ → B_kq['1_2_0'].
-    Keys are digits ('1'), never '1-1'. numPoints ≥ 2.
-    Do not probe energy_levels to learn the API; use get_example_payload('co_sl_axial').
+    Hamiltonian D, E, J_ex, λ, B_kq in cm⁻¹; A_hf in MHz. T in K, B in T.
+    S–L: λ → lambda_SL['1']; chemist σ of Ŝ·L̂ → lambda_sigma_SL['1'] (default 0);
+    axial Δ → B_kq['1_2_0']. Keys digits ('1'), never '1-1'. numPoints ≥ 2.
+    Co(II) S=3/2 L=1: get_example_payload('co_sl_axial').
     """
     request = _to_base_request(payload.spin_systems, payload.hamiltonian_params)
     spin_systems, hp, dim, spec = _prepare(
@@ -705,8 +693,8 @@ def compute_property(
             result["chi_T"] = [c * hp["fixedT"] for c in raw["\\chi"]]
         units = {
             "chi": "cm^3 mol^-1",
-            "delta_chi_ax": "1e-6 cm^3 mol^-1 (SI; 4pi cgs->SI)",
-            "delta_chi_rh": "1e-6 cm^3 mol^-1 (SI; 4pi cgs->SI)",
+            "delta_chi_ax": "1e-6 m^3 mol^-1 (SI; 4pi * Delta-chi_cgs)",
+            "delta_chi_rh": "1e-6 m^3 mol^-1 (SI; 4pi * Delta-chi_cgs)",
             "chi_T": "cm^3 K mol^-1",
         }
     elif property == "magnetization":
@@ -764,9 +752,13 @@ def compute_property(
 def optimize_parameters(payload: OptimizeRequest) -> dict[str, Any]:
     """Fit unfixed Hamiltonian parameters to experimental B, T, and observable columns.
 
-    Call determine_hamiltonian first. Only fit keys that appear in that formula
-    (see allowed_parameter_keys / list_fit_parameter_keys). Extra Hamiltonian terms are rejected.
-    Uses the same Nelder–Mead loop as POST /api/optimize.
+    Call determine_hamiltonian first. Pass the whole request as payload (not maxiter at the top level).
+    Ready-made: get_example_payload(example='fit_zfs').
+    reference_data: arrays of equal length. Must include B (tesla) AND T (kelvin), plus at least one of
+    M, M_x, M_y, M_z, chi, chi_t, delta_chi_ax, delta_chi_rh.
+    χT column is 'chi_t' (lowercase t) — not 'chi_T' from compute_property.
+    parameter_fixed_state keys from list_fit_parameter_keys; True=fixed, False=fit; ≥1 False.
+    maxiter inside payload, default 10, keep ≤20. Nelder–Mead only.
     """
     allowed_obs = {
         "M",

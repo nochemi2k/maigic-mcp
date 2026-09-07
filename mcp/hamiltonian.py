@@ -52,26 +52,29 @@ TERM_PARAM_BLOCKS = {
 }
 
 MCP_INSTRUCTIONS = (
-    "REQUIRED WORKFLOW — do this before every calculation, fit, or modelling step: "
-    "1) Call determine_hamiltonian with the complex (electrons, nuclei, point_group). "
-    "2) Read formula_latex and chemist_mapping. That is the Hamiltonian. Do not invent ZFS, "
-    "exchange, CF, hyperfine, or orbital terms that are missing from it. "
-    "3) Copy spin_systems and hamiltonian_params_template into compute_property / "
-    "optimize_parameters / validate_request. Change only numbers and sweep settings. "
-    "Passing keys that are not in the template is rejected. "
-    "Call list_nuclei before naming nuclei. Call list_lanthanide_ions for Ln(III) S, L, J, g_J. "
-    "If originIon is a Ln(III) name, B_kq is multiplied by Stevens θ_k; if null, θ_k = 1. "
-    "parameter_fixed_state: True = hold fixed, False = fit; at least one key must be False. "
-    "Keep numPoints at 10–20 (minimum 2 — the schema rejects 1) unless the user asks for a dense curve. "
-    "Keep optimize maxiter ≤ 20 and few data points. "
-    "Hilbert-space dimension is the product of (2s+1) over all centers (and L if L>0). "
-    "S–L mapping (do not guess, do not probe energy_levels to learn keys): "
-    "chemist λ (cm⁻¹) → lambda_SL['1'] (digit keys only, never '1-1'); "
-    "chemist σ of the S–L term → lambda_sigma_SL['1'] (template default 0; H_SOC = λ×σ×Ŝ·L̂, so if λ≠0 and this is 0, SOC is identically zero); "
-    "sigma_L['1'] is orbital Zeeman μ_B σ B·L̂ (default 1), not chemist σ of S–L; "
-    "sigma_CF['1_2'] is the CF scale on B_2^q (default 1), not chemist σ of S–L; "
-    "there is no parameter named Δ — axial crystal-field Δ is B_kq['1_2_0']; pass point_group (D4h, C2v, …) to restrict Stevens operators. "
-    "High-spin Co(II) with L=1: S=3/2, L=1; call get_example_payload(example='co_sl_axial') and edit numbers."
+    "REQUIRED WORKFLOW — before every calculation or fit: "
+    "1) determine_hamiltonian(electrons, optional nuclei, point_group). "
+    "2) Read formula_latex and chemist_mapping; do not invent missing ZFS/exchange/CF/hyperfine/orbital terms. "
+    "3) Copy spin_systems + hamiltonian_params_template into compute_property / validate_request / "
+    "optimize_parameters. Change only numbers and sweep settings. Pass the same point_group again. "
+    "Which property: χ/χT/Δχ → compute_property(property='susceptibility') "
+    "(result.chi cm³ mol⁻¹, result.chi_T cm³ K mol⁻¹, result.delta_chi_ax SI 10⁻⁶ m³ mol⁻¹ = 4π×Δχ_cgs); "
+    "M vs B or T → property='magnetization' (M_x, M_y, M_z, powder-mean M in μB); "
+    "levels/ZFS ladder → property='energy_levels' (E_cm_inv). "
+    "Do not probe energy_levels to learn keys. get_example_payload: "
+    "s_half Curie S=1/2 χ; s_one_zfs S=1 D vs B; two_spins_exchange dimer J; "
+    "gd_j Gd(III) J=7/2; co_sl_axial Co(II) S=3/2 L=1; fit_zfs optimize D to χT. "
+    "Nuclei: prefer determine_hamiltonian(nuclei=[{nucleus:'1H'}]); gamma is rad s⁻¹ T⁻¹, not MHz/T. "
+    "Ln(III): list_lanthanide_ions for S, L, J, g_J. type='J' for a multiplet; originIon e.g. 'Dy(III)' "
+    "sets Stevens θ_k and template Landé g_J (Gd=2, Dy=4/3). Null originIon → θ_k=1, g_J=2.0023. "
+    "Fit: parameter_fixed_state True=fixed False=fit; χT column is 'chi_t' not 'chi_T'; "
+    "reference_data needs B and T; maxiter is inside the optimize payload (keep ≤20). "
+    "numPoints 10–20 (min 2). Hilbert dim = ∏(2s+1) (× 2L+1 if L>0). "
+    "S–L: λ → lambda_SL['1'] (digits only, never '1-1'); chemist σ of Ŝ·L̂ → lambda_sigma_SL['1'] "
+    "(default 0; H_SOC=λ×σ×Ŝ·L̂; λ≠0 and σ=0 ⇒ SOC identically zero); "
+    "sigma_L is orbital Zeeman, not chemist σ; sigma_CF is CF rank scale; axial Δ → B_kq['1_2_0']. "
+    "Exchange H=J Ŝ_i·Ŝ_j, keys '1-2'; J>0 antiferromagnetic. "
+    "Co(II) L=1: get_example_payload(example='co_sl_axial')."
 )
 
 CHEMIST_MAPPING_SL: dict[str, str] = {
@@ -100,15 +103,76 @@ CHEMIST_MAPPING_SL: dict[str, str] = {
     ),
 }
 
+CHEMIST_MAPPING_J: dict[str, str] = {
+    "g_J": (
+        "Landé g_J of the J-multiplet. When originIon is a known Ln(III) name (e.g. 'Dy(III)'), "
+        "the template already has the free-ion Landé value (Gd=2, Dy=4/3, Er=6/5). "
+        "Confirm with list_lanthanide_ions. Do not leave electron g=2.0023 on a lanthanide."
+    ),
+    "B_kq": (
+        "Stevens B_k^q (cm⁻¹), keys '{id}_{k}_{q}'. originIon multiplies Stevens θ_k; null → θ_k=1. "
+        "Pass the same point_group on compute_property."
+    ),
+    "J_ex_J": (
+        "Exchange between J-centers: H = J Ĵ_i·Ĵ_j (cm⁻¹), keys '1-2'. J>0 is antiferromagnetic."
+    ),
+}
+
+CHEMIST_MAPPING_EXCHANGE: dict[str, str] = {
+    "J_ex": (
+        "Heisenberg H = J Ŝ_i·Ŝ_j (cm⁻¹), keys '1-2'. "
+        "J>0 antiferromagnetic (singlet ground for two S=1/2); J<0 ferromagnetic."
+    ),
+}
+
+# Ground-term S, L, J for free Ln(III). Used for template Landé g_J and list_lanthanide_ions.
+LANTHANIDE_IONS: dict[str, dict[str, Any]] = {
+    "Ce(III)": {"config": "4f1", "term": "2F5/2", "S": 0.5, "L": 3, "J": 2.5},
+    "Pr(III)": {"config": "4f2", "term": "3H4", "S": 1.0, "L": 5, "J": 4.0},
+    "Nd(III)": {"config": "4f3", "term": "4I9/2", "S": 1.5, "L": 6, "J": 4.5},
+    "Pm(III)": {"config": "4f4", "term": "5I4", "S": 2.0, "L": 6, "J": 4.0},
+    "Sm(III)": {"config": "4f5", "term": "6H5/2", "S": 2.5, "L": 5, "J": 2.5},
+    "Eu(III)": {"config": "4f6", "term": "7F0", "S": 3.0, "L": 3, "J": 0.0},
+    "Gd(III)": {"config": "4f7", "term": "8S7/2", "S": 3.5, "L": 0, "J": 3.5},
+    "Tb(III)": {"config": "4f8", "term": "7F6", "S": 3.0, "L": 3, "J": 6.0},
+    "Dy(III)": {"config": "4f9", "term": "6H15/2", "S": 2.5, "L": 5, "J": 7.5},
+    "Ho(III)": {"config": "4f10", "term": "5I8", "S": 2.0, "L": 6, "J": 8.0},
+    "Er(III)": {"config": "4f11", "term": "4I15/2", "S": 1.5, "L": 6, "J": 7.5},
+    "Tm(III)": {"config": "4f12", "term": "3H6", "S": 1.0, "L": 5, "J": 6.0},
+    "Yb(III)": {"config": "4f13", "term": "2F7/2", "S": 0.5, "L": 3, "J": 7.5},
+}
+
+
+def lande_g(S: float, L: float, J: float) -> float | None:
+    if J <= 0:
+        return None
+    return 1.0 + (J * (J + 1) + S * (S + 1) - L * (L + 1)) / (2.0 * J * (J + 1))
+
+
+def default_g_j(origin_ion: str | None) -> float:
+    data = LANTHANIDE_IONS.get(origin_ion or "")
+    if not data:
+        return 2.0023
+    g = lande_g(data["S"], data["L"], data["J"])
+    return float(g) if g is not None else 2.0023
+
 
 def chemist_mapping_for_spec(term_selection: dict[str, bool]) -> dict[str, str] | None:
-    if not (
+    mapping: dict[str, str] = {}
+    if (
         term_selection.get("H(L)_S-L")
         or term_selection.get("H(L)_e-B")
         or term_selection.get("H(L)_CF")
     ):
-        return None
-    return dict(CHEMIST_MAPPING_SL)
+        mapping.update(CHEMIST_MAPPING_SL)
+    if term_selection.get("H(J)_e-B") or term_selection.get("H(J)_CF"):
+        mapping["g_J"] = CHEMIST_MAPPING_J["g_J"]
+        mapping["B_kq"] = CHEMIST_MAPPING_J["B_kq"]
+    if term_selection.get("H(J)_e-e"):
+        mapping["J_ex_J"] = CHEMIST_MAPPING_J["J_ex_J"]
+    if term_selection.get("H(S)_e-e"):
+        mapping.update(CHEMIST_MAPPING_EXCHANGE)
+    return mapping or None
 
 
 def _float_map(d: dict[str, Any] | None) -> dict[str, float]:
@@ -623,7 +687,10 @@ def _template_and_keys(
                 fit_keys.append(
                     {
                         "key": f"J_ex_{pair}",
-                        "meaning": f"exchange J between S-centers {a} and {b}",
+                        "meaning": (
+                            f"exchange J between S-centers {a} and {b}; "
+                            "H=J Ŝ·Ŝ, J>0 antiferromagnetic"
+                        ),
                         "unit": "cm^-1",
                     }
                 )
@@ -672,11 +739,13 @@ def _template_and_keys(
             allowed_leaf.add(f"lambda_sigma_SL.{sid}")
 
     if term_selection.get("H(J)_e-B"):
+        j_by_id = {s["id"]: s for s in spin_systems if s["type"] == "J"}
         for sid in j_ids:
             key = str(sid)
+            g_j = default_g_j((j_by_id.get(sid) or {}).get("originIon"))
             template["gJType"][key] = "isotropic"
-            template["g_J"][key] = 2.0023
-            template["gJAniso"][key] = [2.0023, 2.0023, 2.0023]
+            template["g_J"][key] = g_j
+            template["gJAniso"][key] = [g_j, g_j, g_j]
             fit_keys.append({"key": f"g_J_{sid}", "meaning": f"isotropic g_J of J-center {sid}", "unit": ""})
             fit_keys.append({"key": f"gJAniso_{sid}_0", "meaning": f"g_x of J-center {sid}", "unit": ""})
             fit_keys.append({"key": f"gJAniso_{sid}_1", "meaning": f"g_y of J-center {sid}", "unit": ""})
@@ -693,7 +762,10 @@ def _template_and_keys(
                 fit_keys.append(
                     {
                         "key": f"J_ex_J_{pair}",
-                        "meaning": f"exchange J between J-centers {a} and {b}",
+                        "meaning": (
+                            f"exchange J between J-centers {a} and {b}; "
+                            "H=J Ĵ·Ĵ, J>0 antiferromagnetic"
+                        ),
                         "unit": "cm^-1",
                     }
                 )
@@ -850,10 +922,12 @@ def determine_from_spin_systems(
         "must_use": (
             "Copy spin_systems and hamiltonian_params_template into compute_property / "
             "optimize_parameters. Change numerical values and sweep settings only. "
+            "Pass the same point_group on those calls. "
             "Do not add D, E, J_ex, B_kq, A_hf, or other keys that are absent from the template — "
             "they are not in this Hamiltonian. "
             "lambda_SL / lambda_sigma_SL keys are center ids as digits ('1'), never '1-1'. "
-            "numPoints ≥ 2. Do not probe energy_levels to learn the API."
+            "χT is result.chi_T; fit χT column is chi_t. numPoints ≥ 2. "
+            "Do not probe energy_levels to learn the API."
         ),
     }
     mapping = chemist_mapping_for_spec(term_selection)

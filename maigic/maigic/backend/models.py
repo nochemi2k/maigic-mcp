@@ -13,8 +13,8 @@ class MagneticSusceptibilityTConstResult(pydantic.BaseModel):
 
     B: typing.List[float] = pydantic.Field(..., description="Magnetic field values (T)")
     chi: typing.List[float] = pydantic.Field(..., alias='\\chi', description="Molar magnetic susceptibility χ (cm³·mol⁻¹)")
-    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial susceptibility anisotropy Δχ_ax (×10⁻⁶ cm³·mol⁻¹)")
-    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic susceptibility anisotropy Δχ_rh (×10⁻⁶ cm³·mol⁻¹)")
+    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial susceptibility anisotropy Δχ_ax (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
+    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic susceptibility anisotropy Δχ_rh (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
 
 class MagneticSusceptibilityBConstResult(pydantic.BaseModel):
     """Result of get_magnetic_susceptibility_b_const: χ vs T at fixed B"""
@@ -22,8 +22,8 @@ class MagneticSusceptibilityBConstResult(pydantic.BaseModel):
 
     T: typing.List[float] = pydantic.Field(..., description="Temperature values (K)")
     chi: typing.List[float] = pydantic.Field(..., alias='\\chi', description="Molar magnetic susceptibility χ (cm³·mol⁻¹)")
-    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial susceptibility anisotropy Δχ_ax (×10⁻⁶ cm³·mol⁻¹)")
-    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic susceptibility anisotropy Δχ_rh (×10⁻⁶ cm³·mol⁻¹)")
+    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial susceptibility anisotropy Δχ_ax (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
+    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic susceptibility anisotropy Δχ_rh (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
 
 # ========================================
 # Magnetization Vector Results
@@ -119,7 +119,13 @@ class ISpinSystem(pydantic.BaseModel):
     id: int = pydantic.Field(..., ge=1, description="Unique identifier for the spin system")
     type: typing.Literal['I'] = pydantic.Field(..., description="Spin system type indicator")
     I: float = pydantic.Field(..., gt=0, description="Nuclear spin quantum number I (e.g., 1/2, 3/2, 5/2)")
-    gamma: float = pydantic.Field(..., description="Gyromagnetic ratio (MHz/T)")
+    gamma: float = pydantic.Field(
+        ...,
+        description=(
+            "Gyromagnetic ratio in rad s⁻¹ T⁻¹, as returned by list_nuclei / "
+            "determine_hamiltonian (e.g. ¹H ≈ 2.6752e8). Do not use MHz/T (42.576)."
+        ),
+    )
     shieldingType: typing.Literal['None', 'Scalar', 'Tensor'] = pydantic.Field(
         ..., 
         description="Type of shielding tensor representation"
@@ -190,9 +196,9 @@ class AllSpinSystems(pydantic.RootModel[typing.List[SpinSystem]]):
         json_schema_extra={
             "example": [
                 {"id": 1, "type": "S", "S": 1.5, "L": 0.0, "originIon": "Gd3+"},
-                {"id": 2, "type": "I", "I": 0.5, "gamma": 42.576, "shieldingType": "scalar",
+                {"id": 2, "type": "I", "I": 0.5, "gamma": 267520000.0, "shieldingType": "None",
                  "shieldingScalar": 0.0, "shieldingDiagonal": [0,0,0],
-                 "shieldingEulerAngles": [0,0,0], "nucleus": "1H"}
+                 "shieldingEulerAngles": [0,0,0], "nucleus": "¹H"}
             ]
         }
     )
@@ -370,7 +376,10 @@ class HamiltonianParameters(pydantic.BaseModel):
     # --- Exchange Coupling (S-type centers) ---
     J_ex: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+-\d+$")], float] = pydantic.Field(
         default_factory=dict,
-        description="Exchange coupling J between S-centers: {'1-2': 0.5, '1-3': -0.2, ...} (cm⁻¹)"
+        description=(
+            "Heisenberg exchange H = J Ŝ_i·Ŝ_j (cm⁻¹), keys '{i}-{j}' e.g. {'1-2': 10}. "
+            "J > 0 is antiferromagnetic (singlet below for two S=1/2). J < 0 is ferromagnetic."
+        )
     )
 
     # --- Orbital Angular Momentum Parameters (L contributions) ---
@@ -408,13 +417,20 @@ class HamiltonianParameters(pydantic.BaseModel):
     )
     g_J: typing.Dict[str, float] = pydantic.Field(
         default_factory=dict,
-        description="Isotropic g_J factor per J-center ID: {'1': 1.5, ...}"
+        description=(
+            "Landé g_J per J-center ID: {'1': 1.333, ...}. "
+            "For Ln(III) copy the value from list_lanthanide_ions (Dy(III)=4/3, Gd(III)=2). "
+            "The electron g 2.0023 is wrong for a lanthanide multiplet."
+        )
     )
 
     # --- Exchange Coupling (J-type centers) ---
     J_ex_J: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+-\d+$")], float] = pydantic.Field(
         default_factory=dict,
-        description="Exchange coupling between J-centers: {'1-2': 0.3, ...} (cm⁻¹)"
+        description=(
+            "Heisenberg exchange H = J Ĵ_i·Ĵ_j (cm⁻¹), keys '{i}-{j}' e.g. {'1-2': 0.3}. "
+            "J > 0 is antiferromagnetic."
+        )
     )
 
     # --- Hyperfine Coupling (I-type centers) ---

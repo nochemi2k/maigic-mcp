@@ -2,7 +2,8 @@
 name: maigic-workflow
 description: >-
   Use MaIGIC MCP without reverse-engineering. Call this before χ, χT, Δχ, magnetization,
-  energy levels, cobalt S+L, spin Hamiltonian, or any compute_property / optimize_parameters call.
+  energy levels, cobalt S+L, spin Hamiltonian, exchange J, ZFS D, Ln(III), fit,
+  or any compute_property / optimize_parameters call.
 ---
 
 # MaIGIC MCP workflow
@@ -11,11 +12,23 @@ Do **not** probe `energy_levels` to learn keys. Do **not** search GitHub or the 
 
 ## Order
 
-1. `determine_hamiltonian` with electrons (and nuclei / `point_group` if needed).
+1. `determine_hamiltonian` with electrons (and nuclei / `point_group` if needed). No ids on electrons.
 2. Read `formula_latex` and `chemist_mapping`. Do not invent terms missing from the formula.
-3. Copy `spin_systems` and `hamiltonian_params_template` into `compute_property` / `validate_request` / `optimize_parameters`. Change **numbers and sweep settings only**. Extra Hamiltonian keys are rejected.
+3. Copy `spin_systems` and `hamiltonian_params_template` into `compute_property` / `validate_request` / `optimize_parameters`. Change **numbers and sweep settings only**. Pass the **same `point_group`**. Extra Hamiltonian keys are rejected.
 
-For high-spin Co(II) S=3/2 L=1: `get_example_payload(example="co_sl_axial")`, then `compute_property(property="susceptibility")`.
+## Chemist request → tool
+
+| User wants | `compute_property` `property` | Result fields |
+|---|---|---|
+| χ, χT, Δχ_ax, Δχ_rh | `susceptibility` | `chi`, `chi_T`, `delta_chi_ax`, `delta_chi_rh` |
+| Magnetization vs B or T | `magnetization` | `M_x`, `M_y`, `M_z`, powder `M` |
+| Energy levels / ZFS ladder | `energy_levels` | `E_cm_inv` |
+
+χ: cm³ mol⁻¹. χT: cm³ K mol⁻¹. Δχ: SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs. M: μB.
+
+For high-spin Co(II) S=3/2 L=1: `get_example_payload(example="co_sl_axial")`, then susceptibility.
+
+Other examples: `s_half`, `s_one_zfs`, `two_spins_exchange` (J>0 AF), `gd_j`, `fit_zfs` (pass the whole object to `optimize_parameters`; χT column is `chi_t` not `chi_T`; `maxiter` is inside payload).
 
 ## S–L chemist names → MCP fields
 
@@ -27,10 +40,11 @@ For high-spin Co(II) S=3/2 L=1: `get_example_payload(example="co_sl_axial")`, th
 | CF scale σ_k | `sigma_CF["1_2"]` | Default 1. **Not** chemist σ of S–L. |
 | axial Δ (cm⁻¹) | `B_kq["1_2_0"]` | There is **no** field named Δ. Pass `point_group` (e.g. D4h). |
 
-## Schema traps
+## Other conventions
 
-- `numPoints` ≥ 2 (1 is rejected). Prefer 10–20 unless the user wants a dense curve.
-- `lambda_SL` / `lambda_sigma_SL` keys match `^\d+$` (`"1"`), not `"1-1"`.
-- Hilbert dimension is ∏(2s+1) over centers (and L if L>0). Keep it modest.
+- Exchange H = J Ŝ_i·Ŝ_j, keys `"1-2"`. **J > 0 antiferromagnetic**.
+- Ln(III): `list_lanthanide_ions`; `type="J"` + `originIon` fills Landé `g_J` in the template.
+- Nuclei: `nuclei=[{nucleus:"1H"}]`. gamma is rad s⁻¹ T⁻¹, not MHz/T.
+- `numPoints` ≥ 2. Prefer 10–20.
 
 If `validate_request` or `compute_property` returns a warning that λ is set but `lambda_sigma_SL` is 0, set chemist σ there — do not probe spectra to discover this.
