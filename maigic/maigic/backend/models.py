@@ -13,8 +13,8 @@ class MagneticSusceptibilityTConstResult(pydantic.BaseModel):
 
     B: typing.List[float] = pydantic.Field(..., description="Magnetic field values (T)")
     chi: typing.List[float] = pydantic.Field(..., alias='\\chi', description="Molar magnetic susceptibility χ (cm³·mol⁻¹)")
-    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial susceptibility anisotropy Δχ_ax (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
-    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic susceptibility anisotropy Δχ_rh (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
+    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial Δχ_ax: SI m³/ion = 4π×(χzz−½(χxx+χyy))[cm³ mol⁻¹]/(N_A×10⁶). Typical 1e-34…1e-28, not comparable to χ.")
+    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic Δχ_rh: SI m³/ion = 4π×(χxx−χyy)[cm³ mol⁻¹]/(N_A×10⁶). Not cm³/mol.")
 
 class MagneticSusceptibilityBConstResult(pydantic.BaseModel):
     """Result of get_magnetic_susceptibility_b_const: χ vs T at fixed B"""
@@ -22,8 +22,8 @@ class MagneticSusceptibilityBConstResult(pydantic.BaseModel):
 
     T: typing.List[float] = pydantic.Field(..., description="Temperature values (K)")
     chi: typing.List[float] = pydantic.Field(..., alias='\\chi', description="Molar magnetic susceptibility χ (cm³·mol⁻¹)")
-    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial susceptibility anisotropy Δχ_ax (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
-    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic susceptibility anisotropy Δχ_rh (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs)")
+    delta_chi_ax: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{ax}', description="Axial Δχ_ax: SI m³/ion = 4π×(χzz−½(χxx+χyy))[cm³ mol⁻¹]/(N_A×10⁶). Typical 1e-34…1e-28, not comparable to χ.")
+    delta_chi_rh: typing.List[float] = pydantic.Field(..., alias='\\Delta \\chi_{rh}', description="Rhombic Δχ_rh: SI m³/ion = 4π×(χxx−χyy)[cm³ mol⁻¹]/(N_A×10⁶). Not cm³/mol.")
 
 # ========================================
 # Magnetization Vector Results
@@ -73,7 +73,7 @@ class SSpinSystem(pydantic.BaseModel):
     L: float = pydantic.Field(..., ge=0, description="Orbital angular momentum quantum number L")
     originIon: typing.Optional[str] = pydantic.Field(
         None,
-        description="Original ion label (e.g., 'Gd³⁺', 'Fe³⁺') if applicable"
+        description="Ln(III) name from list_lanthanide_ions, e.g. 'Dy(III)', or null. Not 'Co(II)' / 'Fe³⁺'."
     )
 
     @pydantic.field_validator('S', 'L', mode='before')
@@ -97,7 +97,7 @@ class JSpinSystem(pydantic.BaseModel):
     J: float = pydantic.Field(..., gt=0, description="Total angular momentum quantum number J (e.g., 0.5, 1, 7/2)")
     originIon: typing.Optional[str] = pydantic.Field(
         None,
-        description="Original ion label (e.g., 'Eu³⁺', 'Tb³⁺') if applicable"
+        description="Ln(III) name from list_lanthanide_ions, e.g. 'Dy(III)', or null."
     )
 
     @pydantic.field_validator('J', mode='before')
@@ -386,23 +386,24 @@ class HamiltonianParameters(pydantic.BaseModel):
     sigma_L: typing.Dict[str, float] = pydantic.Field(
         default_factory=dict,
         description=(
-            "Orbital reduction on μ_B σ B·L̂ (orbital Zeeman) per L-center ID: {'1': 0.9, ...}. "
-            "Default 1. Not the chemist σ of Ŝ·L̂ — that is lambda_sigma_SL."
+            "GUI σ¹ (Orbital g-factor): μ_B σ B·L̂ per L-center, e.g. {'1': 1.35}. "
+            "Default 1. NOT GUI σ^{SL} (that is lambda_sigma_SL). There is no field sigma_SL."
         )
     )
     lambda_SL: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+$")], float] = pydantic.Field(
         default_factory=dict,
         description=(
-            "Chemist λ of Ŝ·L̂ (cm⁻¹) per center ID. Keys are digits only, e.g. {'1': 152.4}. "
+            "GUI λ¹¹ (cm⁻¹) per center ID. Keys are digits only, e.g. {'1': 152.4}. "
             "Never use '1-1'. H_SOC = lambda_SL × lambda_sigma_SL × Ŝ·L̂."
         )
     )
     lambda_sigma_SL: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+$")], float] = pydantic.Field(
         default_factory=dict,
         description=(
-            "Chemist σ of Ŝ·L̂ (dimensionless) per center ID, e.g. {'1': 1.35}. "
-            "Keys are digits only, never '1-1'. Template default is 0: if λ is set and this stays 0, "
-            "SOC is identically zero. Not sigma_L (orbital Zeeman) and not sigma_CF (CF scale)."
+            "GUI σ^{SL} (under λ (S–L) parameters), dimensionless, e.g. {'1': 1.35}. "
+            "Keys are digits only, never '1-1'. There is NO field named sigma_SL. "
+            "Template default is 0: if λ is set and this stays 0, SOC is identically zero. "
+            "Not GUI σ¹ (sigma_L) and not GUI Σ_k^L (sigma_CF)."
         )
     )
 
@@ -443,15 +444,15 @@ class HamiltonianParameters(pydantic.BaseModel):
     sigma_CF: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+_[246]$")], float] = pydantic.Field(
         default_factory=dict,
         description=(
-            "CF scale σ_k on B_k^q per electron & rank k: {'1_2': 1.0, '1_4': 0.8, '1_6': 0.5, ...}. "
-            "Default 1. Not the chemist σ of Ŝ·L̂ (that is lambda_sigma_SL)."
+            "GUI Σ_k^L — CF rank scale on B_k^q, keys '{id}_{k}' e.g. {'1_2': 1.0}. "
+            "Default 1. Not GUI σ^{SL} (lambda_sigma_SL) and not GUI σ¹ (sigma_L)."
         )
     )
     B_kq: typing.Dict[typing.Annotated[str, pydantic.Field(pattern=r"^\d+_[246]_[-+]?\d+$")], float] = pydantic.Field(
         default_factory=dict,
         description=(
-            "Stevens CF parameters B_k^q per electron, rank k, and projection q: "
-            "{'1_2_-2': 0.1, '1_2_0': 0.5, '1_4_4': -0.03, ...} (cm⁻¹). "
+            "GUI B_k^q (cm⁻¹), keys '{id}_{k}_{q}': "
+            "{'1_2_-2': 0.1, '1_2_0': 0.5, '1_4_4': -0.03, ...}. "
             "There is no field named Δ; axial crystal-field Δ is usually B_kq['1_2_0']."
         )
     )
@@ -467,6 +468,32 @@ class HamiltonianParameters(pydantic.BaseModel):
     # ========================================
     # Validators (V2 style)
     # ========================================
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def reject_gui_sigma_aliases(cls, data: typing.Any):
+        """Reject names agents invent for GUI σ¹ / σ^{SL} / Σ_k^L."""
+        if not isinstance(data, dict):
+            return data
+        aliases = {
+            "sigma_SL": (
+                "There is no field 'sigma_SL'. "
+                "GUI σ^{SL}_1 (S–L multiplier next to λ¹¹) is lambda_sigma_SL. "
+                "GUI σ¹ (Orbital g-factor) is sigma_L. "
+                "GUI Σ_k^L is sigma_CF."
+            ),
+            "sigmaSL": (
+                "There is no field 'sigmaSL'. GUI σ^{SL} → lambda_sigma_SL; GUI σ¹ → sigma_L."
+            ),
+            "soc_sigma": "Use lambda_sigma_SL (GUI σ^{SL}), not soc_sigma.",
+            "g_orbital": "Use sigma_L (GUI σ¹, orbital Zeeman), not g_orbital.",
+            "sigmaL": "Use sigma_L (GUI σ¹). Do not confuse with lambda_sigma_SL (GUI σ^{SL}).",
+            "Delta": "There is no field Δ. Axial CF is B_kq['1_2_0'].",
+        }
+        for alias, hint in aliases.items():
+            if alias in data:
+                raise ValueError(hint)
+        return data
 
     @pydantic.field_validator("gAniso", "gJAniso")
     @classmethod

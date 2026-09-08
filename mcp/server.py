@@ -11,13 +11,14 @@ import json
 import os
 import sys
 from contextlib import redirect_stdout
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -200,7 +201,7 @@ def _prepare(
             "do not add D, E, J_ex, B_kq, A_hf, or other keys missing from that template."
         )
     hp = apply_template_defaults(
-        request.hamiltonian_params.model_dump(),
+        deepcopy(hp_user),
         spec["hamiltonian_params_template"],
     )
     for key in (
@@ -228,7 +229,135 @@ def _prepare(
             f"Hilbert-space dimension is {dim} (limit {max_dim}). "
             "Reduce S/L/J/I, drop unused nuclei, or pass force=true."
         )
-    return spin_systems, hp, dim, spec
+        return deepcopy(spin_systems), deepcopy(hp), dim, spec
+
+
+# Sweep / Hamiltonian keys that LLMs often put next to spin_systems (invalid).
+_HP_MUST_NEST = frozenset(
+    {
+        "calculationMode",
+        "fixedB",
+        "fixedT",
+        "Tmin",
+        "Tmax",
+        "Bmin",
+        "Bmax",
+        "numPoints",
+        "tip_correction",
+        "diamagnetic_correction",
+        "g",
+        "gType",
+        "gAniso",
+        "D",
+        "E",
+        "J_ex",
+        "sigma_L",
+        "lambda_SL",
+        "lambda_sigma_SL",
+        "g_J",
+        "gJType",
+        "gJAniso",
+        "J_ex_J",
+        "A_hf",
+        "sigma_CF",
+        "B_kq",
+        "computeE",
+        "computeM",
+        "computeChi",
+        "computeChiAx",
+        "computeChiRh",
+        "computeChiT",
+    }
+)
+
+# Names that are not API fields. GUI labels → real keys.
+_HP_ALIASES = {
+    "sigma_SL": (
+        "There is no field 'sigma_SL'. GUI σ^{SL}_1 (S–L multiplier) is "
+        "hamiltonian_params.lambda_sigma_SL['1']. GUI σ¹ (orbital g-factor) is sigma_L['1']."
+    ),
+    "sigmaSL": (
+        "There is no field 'sigmaSL'. GUI σ^{SL}_1 → lambda_sigma_SL['1']. "
+        "GUI σ¹ → sigma_L['1']."
+    ),
+    "soc_sigma": "Use lambda_sigma_SL (GUI σ^{SL}), not soc_sigma.",
+    "g_orbital": "Use sigma_L (GUI σ¹, orbital Zeeman μ_B σ B·L̂), not g_orbital.",
+    "sigmaL": "Use sigma_L (GUI σ¹). Do not confuse with lambda_sigma_SL (GUI σ^{SL}).",
+    "Delta": "There is no field Δ. Axial CF is B_kq['1_2_0'].",
+    "delta": "There is no field Δ. Axial CF is B_kq['1_2_0'].",
+    "lambda": "Use lambda_SL (GUI λ¹¹). Keys are digits '1', never '1-1'.",
+}
+
+
+def _reject_hp_aliases(hp: dict[str, Any]) -> None:
+    for alias, hint in _HP_ALIASES.items():
+        if alias in hp:
+            raise ValueError(f"Unknown hamiltonian_params field {alias!r}. {hint}")
+
+
+def _params_echo(
+    hp: dict[str, Any],
+    spin_systems: list[dict[str, Any]],
+    point_group: str | None,
+) -> dict[str, Any]:
+    """Canonical values actually used for this call (after template merge). Always recomputed."""
+    return {
+        "recomputed": True,
+        "point_group": point_group,
+        "spin_systems": spin_systems,
+        "calculationMode": hp.get("calculationMode"),
+        "fixedB": hp.get("fixedB"),
+        "fixedT": hp.get("fixedT"),
+        "Tmin": hp.get("Tmin"),
+        "Tmax": hp.get("Tmax"),
+        "Bmin": hp.get("Bmin"),
+        "Bmax": hp.get("Bmax"),
+        "numPoints": hp.get("numPoints"),
+        "g": hp.get("g") or {},
+        "sigma_L": hp.get("sigma_L") or {},
+        "lambda_SL": hp.get("lambda_SL") or {},
+        "lambda_sigma_SL": hp.get("lambda_sigma_SL") or {},
+        "sigma_CF": hp.get("sigma_CF") or {},
+        "B_kq": hp.get("B_kq") or {},
+        "D": hp.get("D") or {},
+        "E": hp.get("E") or {},
+        "J_ex": hp.get("J_ex") or {},
+        "g_J": hp.get("g_J") or {},
+        "gui_sigma_map": {
+            "sigma_L": "GUI σ¹ (Orbital g-factor), μ_B σ B·L̂",
+            "lambda_SL": "GUI λ¹¹ (cm⁻¹), SOC constant",
+            "lambda_sigma_SL": "GUI σ^{SL}, H_SOC = λ × σ^{SL} × S·L. Not sigma_L.",
+            "sigma_CF": "GUI Σ_k^L, CF rank scale. Not σ^{SL}.",
+        },
+    }
+
+
+def _grid_csv(result: dict[str, Any]) -> str | None:
+    """CSV of 1-D sweep columns so an agent can save the grid without inventing a file."""
+    prefer = (
+        "T",
+        "B",
+        "chi",
+        "chi_T",
+        "delta_chi_ax",
+        "delta_chi_rh",
+        "M",
+        "M_x",
+        "M_y",
+        "M_z",
+    )
+    cols: list[str] = []
+    for name in prefer:
+        values = result.get(name)
+        if isinstance(values, list) and values and not isinstance(values[0], (list, tuple)):
+            cols.append(name)
+    if not cols:
+        return None
+    n = len(result[cols[0]])
+    lines = [",".join(cols)]
+    for i in range(n):
+        lines.append(",".join(f"{result[c][i]:.12g}" for c in cols))
+    return "\n".join(lines)
 
 
 def _fit_parameter_catalog(
@@ -291,7 +420,13 @@ class DetermineHamiltonianRequest(BaseModel):
 
 
 class ComputeRequest(BaseModel):
-    """Payload for compute_property / validate_request. Use output of determine_hamiltonian."""
+    """Payload for compute_property / validate_request. Use output of determine_hamiltonian.
+
+    Canonical shape only: {spin_systems, hamiltonian_params, point_group?}.
+    Tmin/Tmax/numPoints/g/sigma_L/lambda_SL/lambda_sigma_SL/B_kq belong inside hamiltonian_params.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     spin_systems: list[SpinSystem] = Field(
         ...,
@@ -303,11 +438,12 @@ class ComputeRequest(BaseModel):
         ),
     )
     hamiltonian_params: HamiltonianParameters = Field(
-        default_factory=HamiltonianParameters,
+        ...,
         description=(
-            "Copy hamiltonian_params_template from determine_hamiltonian, then set values. "
+            "Required. Copy hamiltonian_params_template from determine_hamiltonian, then set values. "
             "Do not add terms that are not in that template. "
-            "calculationMode 'fixedB' sweeps T; 'fixedT' sweeps B."
+            "calculationMode 'fixedB' sweeps T; 'fixedT' sweeps B. "
+            "GUI σ¹ → sigma_L; GUI λ¹¹ → lambda_SL; GUI σ^{SL} → lambda_sigma_SL (not sigma_SL)."
         ),
     )
     point_group: str | None = Field(
@@ -324,8 +460,37 @@ class ComputeRequest(BaseModel):
     )
     force: bool = Field(
         default=False,
-        description="Allow Hilbert-space dimension above the default safety limit.",
+        description="Allow Hilbert-space dimension above the default safety limit. Does not enable caching.",
     )
+    force_refit: bool = Field(
+        default=False,
+        description=(
+            "Accepted for agents that want an explicit invalidate flag. Ignored: "
+            "every compute_property call always recomputes (recomputed is always true)."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _canonical_nested_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        leaked = sorted(k for k in data if k in _HP_MUST_NEST)
+        if leaked:
+            raise ValueError(
+                "Canonical payload is {spin_systems, hamiltonian_params, point_group?}. "
+                f"These fields must sit inside hamiltonian_params, not next to spin_systems: {leaked}."
+            )
+        hp = data.get("hamiltonian_params")
+        if hp is None:
+            raise ValueError(
+                "hamiltonian_params is required. Copy hamiltonian_params_template from "
+                "determine_hamiltonian (or get_example_payload) and put Tmin/Tmax/numPoints/"
+                "sigma_L/lambda_SL/lambda_sigma_SL/B_kq inside it."
+            )
+        if isinstance(hp, dict):
+            _reject_hp_aliases(hp)
+        return data
 
 
 class OptimizeRequest(BaseModel):
@@ -375,6 +540,22 @@ class OptimizeRequest(BaseModel):
         default=False,
         description="Allow Hilbert-space dimension above the optimize safety limit.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _canonical_nested_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        leaked = sorted(k for k in data if k in _HP_MUST_NEST)
+        if leaked:
+            raise ValueError(
+                "Put sweep/Hamiltonian keys inside hamiltonian_params, not next to spin_systems: "
+                f"{leaked}."
+            )
+        hp = data.get("hamiltonian_params")
+        if isinstance(hp, dict):
+            _reject_hp_aliases(hp)
+        return data
 
 
 @mcp.tool
@@ -645,6 +826,7 @@ def validate_request(payload: ComputeRequest) -> dict[str, Any]:
         "above_safety_limit": dim > MAX_HILBERT_DIM,
         "safety_limit": MAX_HILBERT_DIM,
         "fit_parameter_keys": [e["key"] for e in spec["allowed_parameter_keys"]],
+        "params_echo": _params_echo(hp, spin_systems, payload.point_group),
         "warnings": physics_warnings_from_hp(hp, spec),
     }
 
@@ -668,8 +850,13 @@ def compute_property(
         Do not use this to learn API keys.
 
     Hamiltonian D, E, J_ex, λ, B_kq in cm⁻¹; A_hf in MHz. T in K, B in T.
-    S–L: λ → lambda_SL['1']; chemist σ of Ŝ·L̂ → lambda_sigma_SL['1'] (default 0);
-    axial Δ → B_kq['1_2_0']. Keys digits ('1'), never '1-1'. numPoints ≥ 2.
+    GUI H(L) names → API (do not invent sigma_SL):
+      σ¹ (Orbital g-factor) → sigma_L['1']
+      λ¹¹ (cm⁻¹) → lambda_SL['1']
+      σ^{SL}_1 → lambda_sigma_SL['1']  (H_SOC = λ × σ^{SL} × S·L; default 0)
+      Σ_k^L → sigma_CF['1_k']; B_k^q → B_kq['1_k_q']
+    Every call is recomputed from this payload (no result cache). Check params_echo.numPoints
+    against what you sent. Canonical payload: {spin_systems, hamiltonian_params, point_group?}.
     Co(II) S=3/2 L=1: get_example_payload('co_sl_axial').
     """
     request = _to_base_request(payload.spin_systems, payload.hamiltonian_params)
@@ -750,10 +937,15 @@ def compute_property(
         "calculationMode": mode,
         "hilbert_dimension": dim,
         "numPoints": hp["numPoints"],
+        "recomputed": True,
+        "params_echo": _params_echo(hp, spin_systems, payload.point_group),
         "units": units,
         "result": result,
         "warnings": physics_warnings_from_hp(hp, spec),
     }
+    csv_text = _grid_csv(result)
+    if csv_text is not None:
+        payload_out["grid_csv"] = csv_text
     if property == "susceptibility":
         payload_out["conventions"] = SUSCEPTIBILITY_CONVENTIONS
     return _jsonable(payload_out)

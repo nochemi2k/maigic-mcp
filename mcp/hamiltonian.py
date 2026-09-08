@@ -73,9 +73,10 @@ MCP_INSTRUCTIONS = (
     "Fit: parameter_fixed_state True=fixed False=fit; χT column is 'chi_t' not 'chi_T'; "
     "reference_data needs B and T; maxiter is inside the optimize payload (keep ≤20). "
     "numPoints 10–20 (min 2). Hilbert dim = ∏(2s+1) (× 2L+1 if L>0). "
-    "S–L: λ → lambda_SL['1'] (digits only, never '1-1'); chemist σ of Ŝ·L̂ → lambda_sigma_SL['1'] "
-    "(default 0; H_SOC=λ×σ×Ŝ·L̂; λ≠0 and σ=0 ⇒ SOC identically zero); "
-    "sigma_L is orbital Zeeman, not chemist σ; sigma_CF is CF rank scale; axial Δ → B_kq['1_2_0']. "
+    "S–L GUI→API: σ¹ (Orbital g-factor) → sigma_L['1']; λ¹¹ → lambda_SL['1']; "
+    "σ^{SL}_1 → lambda_sigma_SL['1'] (there is NO sigma_SL); Σ_k^L → sigma_CF; B_k^q → B_kq. "
+    "H_SOC=λ×σ^{SL}×Ŝ·L̂ (default σ^{SL}=0 ⇒ SOC zero). compute_property always recomputes; "
+    "check params_echo.numPoints. Payload must nest sweep/H keys inside hamiltonian_params. "
     "Exchange H=J Ŝ_i·Ŝ_j, keys '1-2'; J>0 antiferromagnetic. "
     "Co(II) L=1: get_example_payload(example='co_sl_axial')."
 )
@@ -149,28 +150,49 @@ def validate_origin_ions(spin_systems: list[dict[str, Any]]) -> None:
             )
 
 CHEMIST_MAPPING_SL: dict[str, str] = {
+    "gui_sigma_1": (
+        "GUI σ¹ (section 'σ (Orbital g-factor)') → sigma_L['1']. "
+        "Orbital Zeeman μ_B σ B·L̂. Default 1. This is NOT σ^{SL}."
+    ),
+    "gui_lambda_11": (
+        "GUI λ¹¹ (cm⁻¹, section 'λ (S-L) parameters') → lambda_SL['1']. "
+        "Digit keys only. Never '1-1'."
+    ),
+    "gui_sigma_SL": (
+        "GUI σ^{SL}_1 (under λ (S-L) parameters, next to λ¹¹) → lambda_sigma_SL['1']. "
+        "H_SOC = λ × σ^{SL} × Ŝ·L̂. Template default 0: λ set and this left 0 ⇒ SOC identically zero. "
+        "There is NO API field named sigma_SL."
+    ),
+    "gui_Sigma_k": (
+        "GUI Σ_k^L (CF table) → sigma_CF['1_k'] e.g. '1_2'. Default 1. Not σ^{SL}."
+    ),
+    "gui_B_kq": (
+        "GUI B_k^q (cm⁻¹) → B_kq['1_k_q'] e.g. '1_2_0' for axial Δ. No field named Δ."
+    ),
     "lambda_SL": (
-        "Chemist λ of Ŝ·L̂ (cm⁻¹). Keys are center ids as digits only, e.g. '1'. Never '1-1'."
+        "Chemist λ / GUI λ¹¹ (cm⁻¹). Keys are center ids as digits only, e.g. '1'. Never '1-1'."
     ),
     "lambda_sigma_SL": (
-        "Chemist σ of the S–L term (dimensionless). H_SOC = λ × σ × Ŝ·L̂. "
-        "Template default is 0: if you set λ but leave this at 0, SOC energies stay identically 0."
+        "GUI σ^{SL} of the S–L term (dimensionless). H_SOC = λ × σ^{SL} × Ŝ·L̂. "
+        "Template default is 0: if you set λ but leave this at 0, SOC energies stay identically 0. "
+        "Do not write this as sigma_SL or as sigma_L."
     ),
     "sigma_L": (
-        "Orbital reduction on μ_B σ B·L̂ (orbital Zeeman), default 1. "
-        "Not the chemist σ of S–L; that belongs in lambda_sigma_SL."
+        "GUI σ¹ — orbital reduction on μ_B σ B·L̂ (orbital Zeeman), default 1. "
+        "Not GUI σ^{SL}; that belongs in lambda_sigma_SL."
     ),
     "sigma_CF": (
-        "Per-rank CF scale on B_k^q, keys '{id}_{k}' e.g. '1_2'. Default 1. Not the chemist σ of S–L."
+        "GUI Σ_k^L — per-rank CF scale on B_k^q, keys '{id}_{k}' e.g. '1_2'. Default 1. Not σ^{SL}."
     ),
     "B_kq": (
-        "Stevens B_k^q (cm⁻¹), keys '{id}_{k}_{q}' e.g. '1_2_0'. "
+        "GUI B_k^q (cm⁻¹), keys '{id}_{k}_{q}' e.g. '1_2_0'. "
         "There is no field named Δ. Axial crystal-field Δ is usually B_kq['1_2_0']. "
         "Pass point_group (D4h, C2v, …) so unused q are off."
     ),
     "do_not": (
         "Do not call energy_levels to reverse-engineer key formats or which field is SOC. "
-        "Copy hamiltonian_params_template keys. For Co(II) S=3/2 L=1 use get_example_payload('co_sl_axial')."
+        "There is no sigma_SL. Copy hamiltonian_params_template keys. "
+        "For Co(II) S=3/2 L=1 use get_example_payload('co_sl_axial')."
     ),
 }
 
@@ -266,14 +288,15 @@ def physics_warnings_from_hp(
         sv = lsig.get(cid, 0.0)
         if abs(lv) > 0 and abs(sv) == 0:
             warnings.append(
-                f"Center {cid}: lambda_SL={lv} but lambda_sigma_SL=0. "
-                "H_SOC = λ × σ × Ŝ·L̂, so spin-orbit is identically zero. "
-                "Chemist σ of S–L belongs in lambda_sigma_SL (not sigma_L / sigma_CF)."
+                f"Center {cid}: lambda_SL={lv} (GUI λ¹¹) but lambda_sigma_SL=0 (GUI σ^{{SL}}). "
+                "H_SOC = λ × σ^{{SL}} × Ŝ·L̂, so spin-orbit is identically zero. "
+                "GUI σ^{{SL}} → lambda_sigma_SL; GUI σ¹ → sigma_L; GUI Σ_k^L → sigma_CF. "
+                "There is no field sigma_SL."
             )
         elif abs(lv) == 0 and abs(sv) > 0:
             warnings.append(
-                f"Center {cid}: lambda_sigma_SL={sv} but lambda_SL=0. "
-                "H_SOC is still zero. Set lambda_SL to chemist λ (cm⁻¹)."
+                f"Center {cid}: lambda_sigma_SL={sv} (GUI σ^{{SL}}) but lambda_SL=0 (GUI λ¹¹). "
+                "H_SOC is still zero. Set lambda_SL to GUI λ¹¹ (cm⁻¹)."
             )
     return warnings
 
@@ -300,18 +323,19 @@ def build_co_sl_axial_example() -> dict[str, Any]:
     return {
         "description": (
             "High-spin Co(II) S=3/2 L=1, axial CF. χT and Δχ_ax vs T at 7 T. "
-            "λ → lambda_SL; chemist σ of S–L → lambda_sigma_SL (not sigma_L/sigma_CF); "
-            "Δ → B_kq['1_2_0']. Copy into compute_property(property='susceptibility')."
+            "GUI σ¹ → sigma_L; GUI λ¹¹ → lambda_SL; GUI σ^{SL} → lambda_sigma_SL "
+            "(there is no sigma_SL); GUI B_k^q → B_kq['1_2_0']. "
+            "Copy into compute_property(property='susceptibility')."
         ),
         "point_group": "D4h",
         "spin_systems": spec["spin_systems"],
         "hamiltonian_params": hp,
         "chemist_mapping": spec.get("chemist_mapping"),
         "notes": [
-            "λ = lambda_SL['1'] = 152.4 cm⁻¹ (digit key '1', never '1-1')",
-            "σ of S–L = lambda_sigma_SL['1'] = 1.35; if this stays 0, SOC is identically zero",
-            "sigma_L['1'] = 1.35 is orbital Zeeman reduction (same number as chemist σ, different term)",
-            "Δ axial CF → B_kq['1_2_0'] = -632 cm⁻¹; there is no parameter named Δ",
+            "GUI λ¹¹ = lambda_SL['1'] = 152.4 cm⁻¹ (digit key '1', never '1-1')",
+            "GUI σ^{SL}_1 = lambda_sigma_SL['1'] = 1.35; if this stays 0, SOC is identically zero",
+            "GUI σ¹ = sigma_L['1'] = 1.35 (orbital Zeeman; same number as σ^{SL} here, different term)",
+            "GUI B_k^q / axial Δ → B_kq['1_2_0'] = -632 cm⁻¹; there is no parameter named Δ",
             "numPoints must be ≥ 2",
         ],
     }

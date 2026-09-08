@@ -32,15 +32,17 @@ For high-spin Co(II) S=3/2 L=1: `get_example_payload(example="co_sl_axial")`, th
 
 Other examples: `s_half`, `s_one_zfs`, `two_spins_exchange` (J>0 AF), `gd_j`, `fit_zfs` (pass the whole object to `optimize_parameters`; χT column is `chi_t` not `chi_T`; `maxiter` is inside payload).
 
-## S–L chemist names → MCP fields
+## GUI H(L) names → MCP fields
 
-| Chemist | MCP field | Notes |
+There is **no** API key `sigma_SL`. Nest Tmin / numPoints / σ inside `hamiltonian_params`. Every `compute_property` recomputes (`recomputed: true`); read `params_echo`. Optional `force_refit` is accepted and ignored. Sweep points are also in `grid_csv`.
+
+| GUI | MCP field | Notes |
 |---|---|---|
-| λ (cm⁻¹) | `lambda_SL["1"]` | Digit keys only. **Never `"1-1"`.** |
-| σ of Ŝ·L̂ | `lambda_sigma_SL["1"]` | Template default is **0**. H_SOC = λ × σ × Ŝ·L̂. If λ ≠ 0 and this stays 0, SOC energies are **identically zero**. |
-| orbital reduction on B·L̂ | `sigma_L["1"]` | Default 1. **Not** chemist σ of S–L. |
-| CF scale σ_k | `sigma_CF["1_2"]` | Default 1. **Not** chemist σ of S–L. |
-| axial Δ (cm⁻¹) | `B_kq["1_2_0"]` | There is **no** field named Δ. Pass `point_group` (e.g. D4h). |
+| **σ¹** (Orbital g-factor) | `sigma_L["1"]` | μ_B σ B·L̂. **Not** σ^{SL}. |
+| **λ¹¹** (cm⁻¹) | `lambda_SL["1"]` | Digits only. Never `"1-1"`. |
+| **σ^{SL}_1** | `lambda_sigma_SL["1"]` | H_SOC = λ × σ^{SL} × Ŝ·L̂. Default 0 zeros SOC. |
+| **Σ_k^L** | `sigma_CF["1_2"]` | CF scale. Not σ^{SL}. |
+| **B_k^q** | `B_kq["1_2_0"]` | Axial Δ. |
 
 ## Other conventions
 
