@@ -58,7 +58,9 @@ MCP_INSTRUCTIONS = (
     "3) Copy spin_systems + hamiltonian_params_template into compute_property / validate_request / "
     "optimize_parameters. Change only numbers and sweep settings. Pass the same point_group again. "
     "Which property: χ/χT/Δχ → compute_property(property='susceptibility') "
-    "(result.chi cm³ mol⁻¹, result.chi_T cm³ K mol⁻¹, result.delta_chi_ax SI 10⁻⁶ m³ mol⁻¹ = 4π×Δχ_cgs); "
+    "(result.chi = cgs cm³ mol⁻¹ molar; result.chi_T = chi×T in cm³ K mol⁻¹; "
+    "result.delta_chi_ax/rh = SI m³ PER ION = 4π×Δχ_cgs[cm³ mol⁻¹]/(N_A×10⁶) already applied — "
+    "typical |Δχ| is 1e-34…1e-28, NOT machine zero and NOT the same unit as chi); "
     "M vs B or T → property='magnetization' (M_x, M_y, M_z, powder-mean M in μB); "
     "levels/ZFS ladder → property='energy_levels' (E_cm_inv). "
     "Do not probe energy_levels to learn keys. get_example_payload: "
@@ -67,6 +69,7 @@ MCP_INSTRUCTIONS = (
     "Nuclei: prefer determine_hamiltonian(nuclei=[{nucleus:'1H'}]); gamma is rad s⁻¹ T⁻¹, not MHz/T. "
     "Ln(III): list_lanthanide_ions for S, L, J, g_J. type='J' for a multiplet; originIon e.g. 'Dy(III)' "
     "sets Stevens θ_k and template Landé g_J (Gd=2, Dy=4/3). Null originIon → θ_k=1, g_J=2.0023. "
+    "originIon accepts only those Ln(III) names or null — never 'Co(II)' / other 3d labels. "
     "Fit: parameter_fixed_state True=fixed False=fit; χT column is 'chi_t' not 'chi_T'; "
     "reference_data needs B and T; maxiter is inside the optimize payload (keep ≤20). "
     "numPoints 10–20 (min 2). Hilbert dim = ∏(2s+1) (× 2L+1 if L>0). "
@@ -76,6 +79,74 @@ MCP_INSTRUCTIONS = (
     "Exchange H=J Ŝ_i·Ŝ_j, keys '1-2'; J>0 antiferromagnetic. "
     "Co(II) L=1: get_example_payload(example='co_sl_axial')."
 )
+
+# Magnetochemistry units as computed by the backend (do not rescale).
+# χ stays cgs molar; Δχ is SI m³/ion with 4π, /N_A, and cm³→m³ already applied.
+N_A = 6.02214e23
+SUSCEPTIBILITY_CONVENTIONS: dict[str, Any] = {
+    "do_not_compare_chi_to_delta_chi": (
+        "result.chi and result.delta_chi_ax are different quantities. "
+        "chi is cm^3 mol^-1 (cgs, per mole). delta_chi_ax / delta_chi_rh are m^3 per ion (SI). "
+        "A value such as 1e-31 is a typical physical PCS-scale anisotropy, not numerical noise "
+        "and not 'smaller than chi so it must be zero'."
+    ),
+    "formula": (
+        "delta_chi_ax = 4*pi * (chi_zz - 0.5*(chi_xx + chi_yy)) / (N_A * 1e6); "
+        "delta_chi_rh = 4*pi * (chi_xx - chi_yy) / (N_A * 1e6). "
+        "chi_ii are the same cgs molar tensor (cm^3 mol^-1) whose powder average is result.chi. "
+        "4*pi converts cgs→SI, /N_A converts per mole→per ion, /1e6 converts cm^3→m^3. "
+        "All three factors are already in the returned numbers."
+    ),
+    "N_A": N_A,
+    "inverse_to_cgs_molar_cm3_mol": (
+        "Delta_chi_cgs[cm^3 mol^-1] = delta_chi_ax * N_A * 1e6 / (4*pi). "
+        "Only after this conversion may you compare anisotropy to result.chi."
+    ),
+    "fields": {
+        "chi": {
+            "quantity": "isotropic powder susceptibility (chi_xx+chi_yy+chi_zz)/3",
+            "unit": "cm^3 mol^-1",
+            "system": "cgs",
+            "per": "mole",
+        },
+        "chi_T": {
+            "quantity": "chi * T",
+            "unit": "cm^3 K mol^-1",
+            "system": "cgs",
+            "per": "mole",
+        },
+        "delta_chi_ax": {
+            "quantity": "axial anisotropy chi_zz - 0.5*(chi_xx+chi_yy), then converted",
+            "unit": "m^3",
+            "system": "SI",
+            "per": "ion",
+            "already_applied": ["4*pi (cgs to SI)", "divide by N_A (mole to ion)", "divide by 1e6 (cm^3 to m^3)"],
+            "typical_magnitude": "1e-34 to 1e-28",
+        },
+        "delta_chi_rh": {
+            "quantity": "rhombic anisotropy chi_xx - chi_yy, then converted",
+            "unit": "m^3",
+            "system": "SI",
+            "per": "ion",
+            "already_applied": ["4*pi (cgs to SI)", "divide by N_A (mole to ion)", "divide by 1e6 (cm^3 to m^3)"],
+            "typical_magnitude": "1e-34 to 1e-28; axial models can be ~1e-39 (numerical residue, still not chi units)",
+        },
+    },
+}
+
+
+def validate_origin_ions(spin_systems: list[dict[str, Any]]) -> None:
+    known = sorted(LANTHANIDE_IONS)
+    for spin in spin_systems:
+        name = spin.get("originIon")
+        if not name:
+            continue
+        if name not in LANTHANIDE_IONS:
+            raise ValueError(
+                f"originIon: unknown ion {name!r}; expected one of {known} or null. "
+                "originIon is only for Ln(III) Stevens θ_k. "
+                "3d ions such as Co(II), Fe(III), Ni(II) must use originIon=null."
+            )
 
 CHEMIST_MAPPING_SL: dict[str, str] = {
     "lambda_SL": (
@@ -875,6 +946,7 @@ def determine_from_spin_systems(
     disabled_terms: list[str] | None = None,
     disabled_blocks: list[str] | None = None,
 ) -> dict[str, Any]:
+    validate_origin_ions(spin_systems)
     s_list = [s["S"] for s in spin_systems if s["type"] == "S"]
     l_list = [s.get("L", 0.0) for s in spin_systems if s["type"] == "S"]
     j_list = [s["J"] for s in spin_systems if s["type"] == "J"]

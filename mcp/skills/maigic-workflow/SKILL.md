@@ -24,7 +24,9 @@ Do **not** probe `energy_levels` to learn keys. Do **not** search GitHub or the 
 | Magnetization vs B or T | `magnetization` | `M_x`, `M_y`, `M_z`, powder `M` |
 | Energy levels / ZFS ladder | `energy_levels` | `E_cm_inv` |
 
-χ: cm³ mol⁻¹. χT: cm³ K mol⁻¹. Δχ: SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs. M: μB.
+**Units (do not mix):** `chi` = cgs **cm³ mol⁻¹** (per mole). `chi_T` = chi×T. `delta_chi_ax` / `delta_chi_rh` = SI **m³ per ion** = `4π × Δχ_cgs[cm³ mol⁻¹] / (N_A × 10⁶)` already applied. |Δχ| ~ 10⁻³¹ is physical, not noise — do not compare it to χ. Inverse: `Δχ_cgs = delta_chi_ax × N_A × 10⁶ / (4π)`. M: μB. See `conventions` on the susceptibility response.
+
+`originIon` = Ln(III) name from `list_lanthanide_ions`, or null. Never `Co(II)`.
 
 For high-spin Co(II) S=3/2 L=1: `get_example_payload(example="co_sl_axial")`, then susceptibility.
 

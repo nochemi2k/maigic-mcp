@@ -49,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hamiltonian import (  # noqa: E402
     LANTHANIDE_IONS,
     MCP_INSTRUCTIONS,
+    SUSCEPTIBILITY_CONVENTIONS,
     apply_template_defaults,
     build_co_sl_axial_example,
     determine_from_spin_systems,
@@ -249,7 +250,10 @@ class ElectronSpec(BaseModel):
     J: float | str | None = Field(default=None, description="Total angular momentum if type='J' (e.g. 7.5 or '15/2').")
     originIon: str | None = Field(
         default=None,
-        description="Ln(III) label such as 'Dy(III)' for Stevens θ_k. Null → θ_k = 1.",
+        description=(
+            "Only a name from list_lanthanide_ions, e.g. 'Dy(III)', for Stevens θ_k. "
+            "Null for 3d ions. 'Co(II)', 'Fe(III)', 'Ni(II)' are rejected — use null."
+        ),
     )
 
 
@@ -692,10 +696,16 @@ def compute_property(
         else:
             result["chi_T"] = [c * hp["fixedT"] for c in raw["\\chi"]]
         units = {
-            "chi": "cm^3 mol^-1",
-            "delta_chi_ax": "1e-6 m^3 mol^-1 (SI; 4pi * Delta-chi_cgs)",
-            "delta_chi_rh": "1e-6 m^3 mol^-1 (SI; 4pi * Delta-chi_cgs)",
-            "chi_T": "cm^3 K mol^-1",
+            "chi": "cm^3 mol^-1 (cgs, per mole; powder average of the susceptibility tensor)",
+            "chi_T": "cm^3 K mol^-1 (cgs, per mole; equals chi * T)",
+            "delta_chi_ax": (
+                "m^3 per ion (SI). Already 4*pi * (chi_zz-0.5*(chi_xx+chi_yy)) / (N_A*1e6). "
+                "Not cm^3/mol. Typical |value| 1e-34..1e-28 is physical, not noise."
+            ),
+            "delta_chi_rh": (
+                "m^3 per ion (SI). Already 4*pi * (chi_xx-chi_yy) / (N_A*1e6). "
+                "Not cm^3/mol. Do not compare magnitude to chi."
+            ),
         }
     elif property == "magnetization":
         raw = (
@@ -733,19 +743,20 @@ def compute_property(
     else:
         raise ValueError(f"Unknown property: {property}")
 
-    return _jsonable(
-        {
-            "property": property,
-            "formula_latex": spec["formula_latex"],
-            "terms": spec["terms"],
-            "calculationMode": mode,
-            "hilbert_dimension": dim,
-            "numPoints": hp["numPoints"],
-            "units": units,
-            "result": result,
-            "warnings": physics_warnings_from_hp(hp, spec),
-        }
-    )
+    payload_out: dict[str, Any] = {
+        "property": property,
+        "formula_latex": spec["formula_latex"],
+        "terms": spec["terms"],
+        "calculationMode": mode,
+        "hilbert_dimension": dim,
+        "numPoints": hp["numPoints"],
+        "units": units,
+        "result": result,
+        "warnings": physics_warnings_from_hp(hp, spec),
+    }
+    if property == "susceptibility":
+        payload_out["conventions"] = SUSCEPTIBILITY_CONVENTIONS
+    return _jsonable(payload_out)
 
 
 @mcp.tool

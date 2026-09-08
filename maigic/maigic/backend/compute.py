@@ -68,6 +68,21 @@ cf_params = {
     },
 }
 
+
+def _stevens_theta(origin_ion: typing.Optional[str], kind: typing.Literal['L', 'J'], k: int) -> float:
+    """Stevens θ_k. originIon is an Ln(III) name from cf_params, or null → 1."""
+    if not origin_ion:
+        return 1.0
+    table = cf_params.get(origin_ion)
+    if table is None:
+        known = ", ".join(sorted(cf_params))
+        raise ValueError(
+            f"originIon: unknown ion {origin_ion!r}; expected one of [{known}] or null. "
+            "originIon selects Ln(III) Stevens θ_k only. "
+            "3d ions (Co(II), Fe(III), Ni(II), …) must use originIon=null."
+        )
+    return table[kind][(k - 2) // 2]
+
 def get_stevens_operator(
     operator: np.ndarray,
     k: int,
@@ -474,9 +489,7 @@ def h_l(
         if ('L' not in inner_idxs[idx]) or (inner_idxs[idx]['L'] == 0):
             continue
         
-        theta_k = 1.
-        if idx_to_origin_ion[idx]:
-            theta_k = cf_params[idx_to_origin_ion[idx]]['L'][(k - 2) // 2]
+        theta_k = _stevens_theta(idx_to_origin_ion[idx], 'L', k)
         hamiltonian += cf_term(
             L=operators[inner_idxs[idx]['L']],
             k=k,
@@ -571,9 +584,7 @@ def h_j(
         if ('J' not in inner_idxs[idx]) or (inner_idxs[idx]['J'] == 0):
             continue
         
-        theta_k = 1.
-        if idx_to_origin_ion[idx]:
-            theta_k = cf_params[idx_to_origin_ion[idx]]['J'][(k - 2) // 2]
+        theta_k = _stevens_theta(idx_to_origin_ion[idx], 'J', k)
         hamiltonian += cf_term(
             J=operators[inner_idxs[idx]['J']],
             k=k,
@@ -923,13 +934,15 @@ def get_magnetic_susceptibility(
         diag_values[dim] += hamiltonian_params['diamagnetic_correction']
 
     # diag_values are molar χ in cm³ mol⁻¹ (cgs). χ stays in those units.
-    # Δχ is reported as SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs (do not divide by N_A).
+    # Δχ is magnetochemistry SI m³/ion: 4π × Δχ_cgs / (N_A × 10⁶)
+    # (4π: cgs→SI; /N_A: mol→ion; /10⁶: cm³→m³). Typical |Δχ| is 1e-34…1e-28, not machine zero.
     dax = diag_values[2] - 0.5 * (diag_values[0] + diag_values[1])
     drh = diag_values[0] - diag_values[1]
+    si_per_ion = 4 * np.pi / (1e6 * n_a)
     return {
         '\\chi' : (diag_values[0] + diag_values[1] + diag_values[2]) / 3,
-        '\\Delta \\chi_{ax}' : 4 * np.pi * dax,
-        '\\Delta \\chi_{rh}' : 4 * np.pi * drh,
+        '\\Delta \\chi_{ax}' : si_per_ion * dax,
+        '\\Delta \\chi_{rh}' : si_per_ion * drh,
     }
 
 def get_magnetization_vector_b_const(
