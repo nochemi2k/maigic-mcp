@@ -978,9 +978,12 @@ def determine_from_spin_systems(
     )
     cf_sel = _cf_selection(computed, term_selection, point_group)
     latex = expand_formula_latex(spin_systems, term_selection, cf_sel)
-    template, fit_keys, allowed_leaf = _template_and_keys(
-        spin_systems, term_selection, cf_sel
-    )
+    built = _template_and_keys(spin_systems, term_selection, cf_sel)
+    if built is None:
+        raise ValueError(
+            "Could not build hamiltonian_params_template for these spin_systems."
+        )
+    template, fit_keys, allowed_leaf = built
 
     active_terms = [key for key, on in term_selection.items() if on]
     blocks = sorted({key.split("_")[0] for key in active_terms})

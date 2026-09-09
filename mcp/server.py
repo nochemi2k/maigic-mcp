@@ -185,6 +185,53 @@ def _to_base_request(
     )
 
 
+def _dump_spin_systems(value: Any) -> list[dict[str, Any]]:
+    """AllSpinSystems is a RootModel; FastMCP may also pass a plain list."""
+    if value is None:
+        raise ValueError(
+            "spin_systems is missing. Copy spin_systems from determine_hamiltonian."
+        )
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump()
+    elif isinstance(value, list):
+        dumped = [
+            item.model_dump() if hasattr(item, "model_dump") else dict(item)
+            for item in value
+        ]
+    else:
+        raise ValueError(
+            f"spin_systems must be a list, got {type(value).__name__}."
+        )
+    if isinstance(dumped, dict) and "root" in dumped:
+        dumped = dumped["root"]
+    if not isinstance(dumped, list):
+        raise ValueError(
+            f"spin_systems dump is {type(dumped).__name__}, expected a list."
+        )
+    return dumped
+
+
+def _dump_hamiltonian_params(value: Any) -> dict[str, Any]:
+    if value is None:
+        raise ValueError(
+            "hamiltonian_params is required. Copy hamiltonian_params_template "
+            "from determine_hamiltonian (or get_example_payload)."
+        )
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(exclude_unset=True)
+    elif isinstance(value, dict):
+        dumped = value
+    else:
+        raise ValueError(
+            f"hamiltonian_params must be an object, got {type(value).__name__}."
+        )
+    if not isinstance(dumped, dict):
+        raise ValueError(
+            f"hamiltonian_params dump is {type(dumped).__name__}, expected an object."
+        )
+    return dumped
+
+
 def _prepare(
     request: BaseRequest,
     force: bool,
@@ -194,9 +241,9 @@ def _prepare(
     disabled_terms: list[str] | None = None,
     disabled_blocks: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], int, dict[str, Any]]:
-    spin_systems = request.spin_systems.model_dump()
+    spin_systems = _dump_spin_systems(getattr(request, "spin_systems", None))
     spec = _formula_spec(spin_systems, point_group, disabled_terms, disabled_blocks)
-    hp_user = request.hamiltonian_params.model_dump(exclude_unset=True)
+    hp_user = _dump_hamiltonian_params(getattr(request, "hamiltonian_params", None))
     extras = extra_hamiltonian_keys(hp_user, spec)
     if extras:
         raise ValueError(
@@ -234,7 +281,39 @@ def _prepare(
             f"Hilbert-space dimension is {dim} (limit {max_dim}). "
             "Reduce S/L/J/I, drop unused nuclei, or pass force=true."
         )
-        return deepcopy(spin_systems), deepcopy(hp), dim, spec
+    return deepcopy(spin_systems), deepcopy(hp), dim, spec
+
+
+def _run_prepare(
+    request: BaseRequest,
+    force: bool,
+    **kwargs: Any,
+) -> tuple[list[dict[str, Any]], dict[str, Any], int, dict[str, Any]]:
+    """Never leak a raw `cannot unpack NoneType` to the MCP client."""
+    try:
+        prepared = _prepare(request, force, **kwargs)
+    except TypeError as exc:
+        raise ValueError(
+            f"Internal prepare error ({exc}). "
+            "Pass the canonical payload "
+            "{spin_systems, hamiltonian_params, point_group?} from "
+            "determine_hamiltonian or get_example_payload."
+        ) from exc
+    if prepared is None:
+        raise ValueError(
+            "Hamiltonian prepare returned nothing. "
+            "Copy spin_systems + hamiltonian_params from determine_hamiltonian."
+        )
+    try:
+        spin_systems, hp, dim, spec = prepared
+    except TypeError as exc:
+        raise ValueError(
+            f"Internal prepare error ({exc}). "
+            "Pass the canonical payload "
+            "{spin_systems, hamiltonian_params, point_group?} from "
+            "determine_hamiltonian or get_example_payload."
+        ) from exc
+    return spin_systems, hp, dim, spec
 
 
 # Sweep / Hamiltonian keys that LLMs often put next to spin_systems (invalid).
@@ -930,7 +1009,7 @@ def validate_request(payload: ComputeRequest) -> dict[str, Any]:
     Rejects Hamiltonian keys that are not in the formula from determine_hamiltonian.
     """
     request = _to_base_request(payload.spin_systems, payload.hamiltonian_params)
-    spin_systems, hp, dim, spec = _prepare(request, force=True, **_formula_kwargs(payload))
+    spin_systems, hp, dim, spec = _run_prepare(request, force=True, **_formula_kwargs(payload))
     kinds: dict[str, int] = {}
     for spin in spin_systems:
         kinds[spin["type"]] = kinds.get(spin["type"], 0) + 1
@@ -988,7 +1067,7 @@ def compute_property(
     Co(II) S=3/2 L=1: get_example_payload('co_sl_axial').
     """
     request = _to_base_request(payload.spin_systems, payload.hamiltonian_params)
-    spin_systems, hp, dim, spec = _prepare(
+    spin_systems, hp, dim, spec = _run_prepare(
         request, force=payload.force, **_formula_kwargs(payload)
     )
     mode = hp["calculationMode"]
@@ -1154,7 +1233,7 @@ def optimize_parameters(payload: OptimizeRequest) -> dict[str, Any]:
         payload.hamiltonian_params,
         payload.parameter_fixed_state,
     )
-    spin_systems, hp, dim, spec = _prepare(
+    spin_systems, hp, dim, spec = _run_prepare(
         request,
         force=payload.force,
         max_dim=MAX_OPT_HILBERT_DIM,
