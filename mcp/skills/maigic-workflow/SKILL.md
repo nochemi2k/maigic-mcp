@@ -24,7 +24,7 @@ Do **not** probe `energy_levels` to learn keys. Do **not** search GitHub or the 
 | Magnetization vs B or T | `magnetization` | `M_x`, `M_y`, `M_z`, powder `M` |
 | Energy levels / ZFS ladder | `energy_levels` | `E_cm_inv` |
 
-**Units (do not mix):** `chi` = cgs **cm³ mol⁻¹** (per mole). `chi_T` = chi×T. `delta_chi_ax` / `delta_chi_rh` = SI **m³ per ion** = `4π × Δχ_cgs[cm³ mol⁻¹] / (N_A × 10⁶)` already applied. |Δχ| ~ 10⁻³¹ is physical, not noise — do not compare it to χ. Inverse: `Δχ_cgs = delta_chi_ax × N_A × 10⁶ / (4π)`. M: μB. See `conventions` on the susceptibility response.
+**Units:** see NON-NEGOTIABLE SUSCEPTIBILITY UNIT RULE below. Fit χT column is `chi_t`, not `chi_T`.
 
 `originIon` = Ln(III) name from `list_lanthanide_ions`, or null. Never `Co(II)`.
 
@@ -52,3 +52,25 @@ There is **no** API key `sigma_SL`. Nest Tmin / numPoints / σ inside `hamiltoni
 - `numPoints` ≥ 2. Prefer 10–20.
 
 If `validate_request` or `compute_property` returns a warning that λ is set but `lambda_sigma_SL` is 0, set chemist σ there — do not probe spectra to discover this.
+
+## NON-NEGOTIABLE SUSCEPTIBILITY UNIT RULE
+
+`chi` and `delta_chi_ax` are not numerically comparable.
+
+| Field | Unit | Basis | System |
+|---|---|---|---|
+| `chi` | `cm^3 mol^-1` | per mole | cgs |
+| `chi_T` | `cm^3 K mol^-1` | per mole | cgs |
+| `delta_chi_ax` | `m^3 ion^-1` | per ion | SI |
+| `delta_chi_rh` | `m^3 ion^-1` | per ion | SI |
+
+Hard rules:
+
+- Never compare the raw numerical value of `chi` with `delta_chi_ax`.
+- Never call `delta_chi_ax = 1e-31` zero because the exponent is small.
+- Never use a generic threshold such as `abs(x) < 1e-6` for `delta_chi`.
+- Read `quantity_metadata` returned by `compute_property`.
+- Use `is_exact_zero` only for exact numerical zero.
+- To compare with `chi`, first convert: `delta_chi_cgs = delta_chi_si * N_A * 1e6 / (4*pi)`.
+- In the final answer, always write the unit next to every value.
+- Do not repeat the computation merely because `delta_chi` has magnitude `1e-31`.

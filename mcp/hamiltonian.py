@@ -58,9 +58,10 @@ MCP_INSTRUCTIONS = (
     "3) Copy spin_systems + hamiltonian_params_template into compute_property / validate_request / "
     "optimize_parameters. Change only numbers and sweep settings. Pass the same point_group again. "
     "Which property: χ/χT/Δχ → compute_property(property='susceptibility') "
-    "(result.chi = cgs cm³ mol⁻¹ molar; result.chi_T = chi×T in cm³ K mol⁻¹; "
-    "result.delta_chi_ax/rh = SI m³ PER ION = 4π×Δχ_cgs[cm³ mol⁻¹]/(N_A×10⁶) already applied — "
-    "typical |Δχ| is 1e-34…1e-28, NOT machine zero and NOT the same unit as chi); "
+    "(result.chi = cgs cm³ mol⁻¹ per mole; result.chi_T = chi×T in cm³ K mol⁻¹ per mole; "
+    "result.delta_chi_ax/rh = SI m³ ion⁻¹ per ion = 4π×Δχ_cgs[cm³ mol⁻¹]/(N_A×10⁶) already applied. "
+    "Never compare raw delta_chi to chi; never treat 1e-31 as zero from the exponent; "
+    "use quantity_metadata.is_exact_zero; do not recompute because of the exponent); "
     "M vs B or T → property='magnetization' (M_x, M_y, M_z, powder-mean M in μB); "
     "levels/ZFS ladder → property='energy_levels' (E_cm_inv). "
     "Do not probe energy_levels to learn keys. get_example_payload: "
@@ -85,54 +86,49 @@ MCP_INSTRUCTIONS = (
 # χ stays cgs molar; Δχ is SI m³/ion with 4π, /N_A, and cm³→m³ already applied.
 N_A = 6.02214e23
 SUSCEPTIBILITY_CONVENTIONS: dict[str, Any] = {
-    "do_not_compare_chi_to_delta_chi": (
-        "result.chi and result.delta_chi_ax are different quantities. "
-        "chi is cm^3 mol^-1 (cgs, per mole). delta_chi_ax / delta_chi_rh are m^3 per ion (SI). "
-        "A value such as 1e-31 is a typical physical PCS-scale anisotropy, not numerical noise "
-        "and not 'smaller than chi so it must be zero'."
-    ),
-    "formula": (
-        "delta_chi_ax = 4*pi * (chi_zz - 0.5*(chi_xx + chi_yy)) / (N_A * 1e6); "
-        "delta_chi_rh = 4*pi * (chi_xx - chi_yy) / (N_A * 1e6). "
-        "chi_ii are the same cgs molar tensor (cm^3 mol^-1) whose powder average is result.chi. "
-        "4*pi converts cgs→SI, /N_A converts per mole→per ion, /1e6 converts cm^3→m^3. "
-        "All three factors are already in the returned numbers."
-    ),
-    "N_A": N_A,
-    "inverse_to_cgs_molar_cm3_mol": (
-        "Delta_chi_cgs[cm^3 mol^-1] = delta_chi_ax * N_A * 1e6 / (4*pi). "
-        "Only after this conversion may you compare anisotropy to result.chi."
+    "critical_rule": (
+        "Do not classify delta_chi_ax or delta_chi_rh as zero from "
+        "their exponent. They are SI per-ion quantities."
     ),
     "fields": {
         "chi": {
-            "quantity": "isotropic powder susceptibility (chi_xx+chi_yy+chi_zz)/3",
+            "quantity": "powder-average susceptibility",
             "unit": "cm^3 mol^-1",
             "system": "cgs",
-            "per": "mole",
+            "basis": "per_mole",
         },
         "chi_T": {
             "quantity": "chi * T",
             "unit": "cm^3 K mol^-1",
             "system": "cgs",
-            "per": "mole",
+            "basis": "per_mole",
         },
         "delta_chi_ax": {
-            "quantity": "axial anisotropy chi_zz - 0.5*(chi_xx+chi_yy), then converted",
-            "unit": "m^3",
+            "quantity": "chi_zz - 0.5 * (chi_xx + chi_yy)",
+            "unit": "m^3 ion^-1",
             "system": "SI",
-            "per": "ion",
-            "already_applied": ["4*pi (cgs to SI)", "divide by N_A (mole to ion)", "divide by 1e6 (cm^3 to m^3)"],
-            "typical_magnitude": "1e-34 to 1e-28",
+            "basis": "per_ion",
         },
         "delta_chi_rh": {
-            "quantity": "rhombic anisotropy chi_xx - chi_yy, then converted",
-            "unit": "m^3",
+            "quantity": "chi_xx - chi_yy",
+            "unit": "m^3 ion^-1",
             "system": "SI",
-            "per": "ion",
-            "already_applied": ["4*pi (cgs to SI)", "divide by N_A (mole to ion)", "divide by 1e6 (cm^3 to m^3)"],
-            "typical_magnitude": "1e-34 to 1e-28; axial models can be ~1e-39 (numerical residue, still not chi units)",
+            "basis": "per_ion",
         },
     },
+    "conversion": {
+        "si_per_ion_to_cgs_per_mole": (
+            "delta_chi_cgs = delta_chi_si * N_A * 1e6 / (4*pi)"
+        ),
+        "cgs_per_mole_to_si_per_ion": (
+            "delta_chi_si = 4*pi * delta_chi_cgs / (N_A * 1e6)"
+        ),
+        "N_A": N_A,
+    },
+    "comparison": (
+        "Compare delta_chi with chi only after converting delta_chi to "
+        "cm^3 mol^-1. Never use abs(delta_chi) < 1e-6 as a zero test."
+    ),
 }
 
 

@@ -70,6 +70,11 @@ MAX_OPT_HILBERT_DIM = 64
 MAX_OPT_POINTS = 40
 MAX_OPT_ITER = 50
 
+AVOGADRO = 6.02214e23
+FOUR_PI = 4.0 * np.pi
+DELTA_CHI_CGS_TO_SI_PER_ION = FOUR_PI / (AVOGADRO * 1e6)
+DELTA_CHI_SI_PER_ION_TO_CGS = 1.0 / DELTA_CHI_CGS_TO_SI_PER_ION
+
 def _http_auth() -> StaticTokenVerifier:
     token = os.environ.get("MCP_TOKEN", "").strip()
     if not token:
@@ -360,6 +365,117 @@ def _grid_csv(result: dict[str, Any]) -> str | None:
     return "\n".join(lines)
 
 
+def _as_float_list(values: Any) -> list[Any]:
+    if values is None:
+        return []
+    if isinstance(values, list):
+        return values
+    return [values]
+
+
+def _series_abs_max(values: Any) -> float:
+    if not isinstance(values, list):
+        try:
+            return abs(float(values))
+        except (TypeError, ValueError):
+            return 0.0
+    finite_values = []
+    for x in values:
+        if x is None:
+            continue
+        try:
+            fx = float(x)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(fx):
+            finite_values.append(abs(fx))
+    return max(finite_values, default=0.0)
+
+
+def _susceptibility_quantity_metadata(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Units and comparison rules so the LLM does not infer physics from the exponent."""
+    delta_ax = _as_float_list(result.get("delta_chi_ax", []))
+    delta_rh = _as_float_list(result.get("delta_chi_rh", []))
+
+    def delta_metadata(
+        field: str,
+        values: list[Any],
+        anisotropy_name: str,
+    ) -> dict[str, Any]:
+        cgs_values = [
+            None
+            if value is None
+            else float(value) * DELTA_CHI_SI_PER_ION_TO_CGS
+            for value in values
+        ]
+        present = [value for value in values if value is not None]
+        exact_zero = bool(present) and all(float(value) == 0.0 for value in present)
+        return {
+            "field": field,
+            "quantity": anisotropy_name,
+            "value_unit": "m^3 ion^-1",
+            "value_system": "SI",
+            "value_basis": "per_ion",
+            "equivalent_cgs_values": cgs_values,
+            "equivalent_cgs_unit": "cm^3 mol^-1",
+            "conversion": (
+                "delta_chi_cgs[cm^3 mol^-1] = "
+                "delta_chi_si[m^3 ion^-1] * N_A * 1e6 / (4*pi)"
+            ),
+            "N_A": AVOGADRO,
+            "max_abs_value": _series_abs_max(values),
+            "is_exact_zero": exact_zero,
+            "interpretation": (
+                "A small numerical value is expected because this field is "
+                "SI per ion. Do not interpret 1e-31 as zero and do not "
+                "compare the raw value with chi."
+            ),
+            "comparison_group": "susceptibility_anisotropy_si_per_ion",
+            "must_not_compare_raw_with": ["chi", "chi_T"],
+        }
+
+    return {
+        "chi": {
+            "field": "chi",
+            "quantity": "powder-average molar susceptibility",
+            "unit": "cm^3 mol^-1",
+            "system": "cgs",
+            "basis": "per_mole",
+            "comparison_group": "susceptibility_cgs_per_mole",
+        },
+        "chi_T": {
+            "field": "chi_T",
+            "quantity": "chi multiplied by T",
+            "unit": "cm^3 K mol^-1",
+            "system": "cgs",
+            "basis": "per_mole",
+            "comparison_group": "chi_T_cgs_per_mole",
+        },
+        "delta_chi_ax": delta_metadata(
+            "delta_chi_ax",
+            delta_ax,
+            "axial susceptibility anisotropy",
+        ),
+        "delta_chi_rh": delta_metadata(
+            "delta_chi_rh",
+            delta_rh,
+            "rhombic susceptibility anisotropy",
+        ),
+        "rules": [
+            "chi is cgs and per mole",
+            "chi_T is cgs and per mole",
+            "delta_chi_ax is SI and per ion",
+            "delta_chi_rh is SI and per ion",
+            "raw delta_chi values must not be compared with raw chi values",
+            "the exponent of delta_chi is not a zero test",
+            "use is_exact_zero rather than abs(value) < a generic threshold",
+            "do not recompute merely because delta_chi has magnitude ~1e-31",
+        ],
+    }
+
+
 def _fit_parameter_catalog(
     spin_systems: list[dict[str, Any]],
     point_group: str | None = None,
@@ -521,9 +637,13 @@ class OptimizeRequest(BaseModel):
     reference_data: dict[str, list[float]] = Field(
         ...,
         description=(
-            "Experimental columns of equal length. Must include B (tesla) and T (kelvin), "
-            "plus at least one of M, M_x, M_y, M_z, chi, chi_t, delta_chi_ax, delta_chi_rh. "
-            "chi in cm^3 mol^-1, chi_t in cm^3 K mol^-1, M in μB."
+            "Experimental columns of equal length. Must include B (tesla) "
+            "and T (kelvin). Observable units are: "
+            "M/M_x/M_y/M_z in mu_B; "
+            "chi in cm^3 mol^-1 cgs per mole; "
+            "chi_t in cm^3 K mol^-1 cgs per mole; "
+            "delta_chi_ax and delta_chi_rh in m^3 ion^-1 SI per ion. "
+            "Do not provide delta_chi in cm^3 mol^-1."
         ),
     )
     maxiter: int = Field(
@@ -843,8 +963,16 @@ def compute_property(
 
     property (pick from the chemist request):
       - susceptibility: χ vs T (fixedB) or vs B (fixedT).
-        result.chi (cm³ mol⁻¹), result.chi_T (cm³ K mol⁻¹), result.delta_chi_ax / delta_chi_rh
-        (SI 10⁻⁶ m³ mol⁻¹ = 4π × Δχ_cgs). This is the tool for χ, χT, and Δχ plots.
+        result.chi: cgs molar susceptibility, unit cm^3 mol^-1, per mole.
+        result.chi_T: chi multiplied by temperature, unit cm^3 K mol^-1, per mole.
+        result.delta_chi_ax and result.delta_chi_rh: susceptibility anisotropies,
+        unit m^3 ion^-1, SI, per ion.
+        Conversion already applied:
+          delta_chi_si[m^3 ion^-1] = 4*pi * delta_chi_cgs[cm^3 mol^-1] / (N_A * 1e6).
+        Values around 1e-31 m^3 ion^-1 are physically meaningful in this unit convention.
+        Never compare raw delta_chi values with raw chi values.
+        Never classify delta_chi as zero from its decimal exponent.
+        Use quantity_metadata.is_exact_zero. Do not recompute because of the exponent.
       - magnetization: M_x, M_y, M_z and powder-mean result.M (μB). Use calculationMode='fixedT' for M vs B.
       - energy_levels: eigenvalues. fixedB → one spectrum; fixedT → vs B. result.E_cm_inv.
         Do not use this to learn API keys.
@@ -886,12 +1014,14 @@ def compute_property(
             "chi": "cm^3 mol^-1 (cgs, per mole; powder average of the susceptibility tensor)",
             "chi_T": "cm^3 K mol^-1 (cgs, per mole; equals chi * T)",
             "delta_chi_ax": (
-                "m^3 per ion (SI). Already 4*pi * (chi_zz-0.5*(chi_xx+chi_yy)) / (N_A*1e6). "
-                "Not cm^3/mol. Typical |value| 1e-34..1e-28 is physical, not noise."
+                "m^3 ion^-1 (SI, per ion). "
+                "Already 4*pi * (chi_zz-0.5*(chi_xx+chi_yy)) / (N_A*1e6). "
+                "Not cm^3/mol. See quantity_metadata; use is_exact_zero, not the exponent."
             ),
             "delta_chi_rh": (
-                "m^3 per ion (SI). Already 4*pi * (chi_xx-chi_yy) / (N_A*1e6). "
-                "Not cm^3/mol. Do not compare magnitude to chi."
+                "m^3 ion^-1 (SI, per ion). "
+                "Already 4*pi * (chi_xx-chi_yy) / (N_A*1e6). "
+                "Not cm^3/mol. Do not compare raw values with chi."
             ),
         }
     elif property == "magnetization":
@@ -948,6 +1078,14 @@ def compute_property(
         payload_out["grid_csv"] = csv_text
     if property == "susceptibility":
         payload_out["conventions"] = SUSCEPTIBILITY_CONVENTIONS
+        payload_out["quantity_metadata"] = _susceptibility_quantity_metadata(result)
+        payload_out["agent_instruction"] = (
+            "Report delta_chi_ax and delta_chi_rh as SI per-ion quantities. "
+            "A value near 1e-31 m^3 ion^-1 is not automatically zero. "
+            "Do not compare raw delta_chi values with chi or chi_T. "
+            "Use quantity_metadata and is_exact_zero. "
+            "Do not recompute because of the exponent."
+        )
     return _jsonable(payload_out)
 
 
@@ -959,6 +1097,11 @@ def optimize_parameters(payload: OptimizeRequest) -> dict[str, Any]:
     Ready-made: get_example_payload(example='fit_zfs').
     reference_data: arrays of equal length. Must include B (tesla) AND T (kelvin), plus at least one of
     M, M_x, M_y, M_z, chi, chi_t, delta_chi_ax, delta_chi_rh.
+    reference_data units:
+      M, M_x, M_y, M_z: mu_B
+      chi: cm^3 mol^-1, cgs, per mole
+      chi_t: cm^3 K mol^-1, cgs, per mole
+      delta_chi_ax / delta_chi_rh: m^3 ion^-1, SI, per ion (not cm^3 mol^-1)
     χT column is 'chi_t' (lowercase t) — not 'chi_T' from compute_property.
     parameter_fixed_state keys from list_fit_parameter_keys; True=fixed, False=fit; ≥1 False.
     maxiter inside payload, default 10, keep ≤20. Nelder–Mead only.
